@@ -26,9 +26,10 @@ const DEFAULTS = {
   source_credit: "none",
   image_model: "@cf/black-forest-labs/flux-2-klein-4b",
   image_style:
-    "documentary photojournalism, shot on a full-frame camera with a 35mm lens, natural light, realistic colours, fine detail",
+    "bright high-end editorial photography, shot on a full-frame camera with a 35mm lens, sunny or brightly lit, vivid natural colours, high clarity",
   image_ai_label: false,
   people_in_images: "none",
+  image_enhance: "normal",
   accent_color: "#FFC72C",
   footer_icons: ["facebook", "instagram", "x", "linkedin", "web"],
   footer_handle: "",
@@ -174,6 +175,7 @@ function cleanSettingsPatch(patch) {
   for (const k of ["active_start_hour", "active_end_hour"]) if (k in out) out[k] = Math.max(0, Math.min(24, Math.round(out[k])));
   if ("accent_color" in out && !/^#[0-9a-fA-F]{6}$/.test(out.accent_color)) throw new HttpError(400, "accent colour must look like #FFC72C");
   if ("source_credit" in out && !["none", "name", "link"].includes(out.source_credit)) throw new HttpError(400, "bad source_credit");
+  if ("image_enhance" in out && !["off", "normal", "strong"].includes(out.image_enhance)) throw new HttpError(400, "bad image_enhance");
   if ("people_in_images" in out && !["none", "anonymous"].includes(out.people_in_images)) throw new HttpError(400, "bad people_in_images");
   return out;
 }
@@ -353,7 +355,7 @@ async function applyPublish(env, origin, post, s) {
 
 // ---------- Workers AI ----------
 
-async function aiImage(env, { prompt, width = 1024, height = 1232, model }) {
+async function aiImage(env, { prompt, width = 1024, height = 1232, model, references = [] }) {
   if (!prompt) throw new HttpError(400, "prompt required");
   const m = model || DEFAULTS.image_model;
   let res;
@@ -362,6 +364,11 @@ async function aiImage(env, { prompt, width = 1024, height = 1232, model }) {
     form.append("prompt", prompt.slice(0, 2000));
     form.append("width", String(width));
     form.append("height", String(height));
+    // Reference pictures (e.g. real flag images) keep small details accurate; max 4, each < 512px.
+    references.slice(0, 4).forEach((b64, i) => {
+      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      form.append(`input_image_${i}`, new Blob([bytes], { type: "image/png" }), `ref${i}.png`);
+    });
     const packed = new Response(form);
     res = await env.AI.run(m, { multipart: { body: packed.body, contentType: packed.headers.get("content-type") } });
   } else {

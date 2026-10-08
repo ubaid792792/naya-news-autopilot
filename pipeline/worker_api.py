@@ -45,9 +45,11 @@ class WorkerAPI:
         self._call("PATCH", f"/pipeline/runs/{run_id}", json={
             "status": status, "summary": summary, "log": log[-20000:]})
 
-    def generate_image(self, prompt: str, width: int, height: int, model: str) -> bytes:
+    def generate_image(self, prompt: str, width: int, height: int, model: str,
+                       references: list[str] | None = None) -> bytes:
         res = self._call("POST", "/pipeline/ai/image", timeout=150, retries=1, json={
-            "prompt": prompt, "width": width, "height": height, "model": model})
+            "prompt": prompt, "width": width, "height": height, "model": model,
+            "references": references or []})
         if not res.get("image"):
             raise WorkerError(f"image model returned no image: {str(res)[:200]}")
         return base64.b64decode(res["image"])

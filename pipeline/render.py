@@ -11,7 +11,9 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+import math
+
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps, ImageStat
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
 FONTS = ASSETS / "fonts"
@@ -52,6 +54,24 @@ def cover_fit(img: Image.Image, width: int = W, height: int = H) -> Image.Image:
     # Bias the crop upward a little: the subject usually sits above the headline area.
     top = max(0, min(resized.height - height, int((resized.height - height) * 0.35)))
     return resized.crop((left, top, left + width, top + height))
+
+
+def enhance_photo(img: Image.Image, strength: float = 1.0) -> Image.Image:
+    """Make the AI picture bright and vibrant: gentle auto-levels, midtone lift for dark images,
+    extra colour saturation, a touch of contrast and sharpening."""
+    if strength <= 0:
+        return img
+    img = ImageOps.autocontrast(img.convert("RGB"), cutoff=0.4, preserve_tone=True)
+    lum = ImageStat.Stat(img.convert("L")).mean[0] / 255
+    target = 0.50
+    if 0.02 < lum < target:
+        gamma = max(0.62, min(1.0, math.log(target) / math.log(lum)))
+        gamma = 1 - (1 - gamma) * min(1.0, strength)
+        lut = [round(255 * ((i / 255) ** gamma)) for i in range(256)]
+        img = img.point(lut * 3)
+    img = ImageEnhance.Color(img).enhance(1 + 0.25 * strength)
+    img = ImageEnhance.Contrast(img).enhance(1 + 0.06 * strength)
+    return img.filter(ImageFilter.UnsharpMask(radius=2, percent=int(55 * strength), threshold=3))
 
 
 def _gradient_layer(start_y: int, end_y: int, max_alpha: int, top_down: bool) -> Image.Image:
@@ -236,11 +256,14 @@ def render_card(
     footer_icons: list[str] | None = None,
     footer_handle: str = "",
     ai_label: bool = False,
+    enhance: float = 1.0,
 ) -> bytes:
     accent = hex_to_rgb(accent_hex)
-    canvas = cover_fit(Image.open(io.BytesIO(background))).convert("RGBA")
-    canvas.alpha_composite(_gradient_layer(0, 300, 150, top_down=True))
-    canvas.alpha_composite(_gradient_layer(int(H * 0.42), int(H * 0.86), 245, top_down=False))
+    photo = enhance_photo(cover_fit(Image.open(io.BytesIO(background))), enhance)
+    canvas = photo.convert("RGBA")
+    # Light top shade keeps the logo readable; the bottom fade carries the headline.
+    canvas.alpha_composite(_gradient_layer(0, 240, 105, top_down=True))
+    canvas.alpha_composite(_gradient_layer(int(H * 0.47), int(H * 0.88), 238, top_down=False))
 
     _draw_headline(canvas, headline, highlights, accent)
     _draw_footer(canvas, footer_icons if footer_icons is not None else

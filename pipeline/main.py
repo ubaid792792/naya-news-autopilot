@@ -188,7 +188,9 @@ def main() -> int:
                 continue
             prompt = data["image_prompt"].strip() + " " + prompts.image_suffix(s.get("people_in_images", "none"))
             log.info("scene: %s", data.get("scene"))
-            bg, image_model = generate_image(worker, prompt, s.get("image_model"))
+            scene = data.get("scene") or {}
+            flag_codes = [str(c) for c in (scene.get("flags") or []) if c][:2]
+            bg, image_model = generate_image(worker, prompt, s.get("image_model"), flag_codes)
             if image_model == "pollinations":  # trim the corner watermark
                 im = Image.open(io.BytesIO(bg))
                 buf = io.BytesIO()
@@ -197,7 +199,8 @@ def main() -> int:
             card = render_card(
                 bg, data["headline"], data["highlights"], brand_name=s["brand_name"], accent_hex=s.get("accent_color"),
                 logo_png=logo, frame_png=frame, footer_icons=s.get("footer_icons"),
-                footer_handle=s.get("footer_handle", ""), ai_label=bool(s.get("image_ai_label")))
+                footer_handle=s.get("footer_handle", ""), ai_label=bool(s.get("image_ai_label")),
+                enhance={"off": 0.0, "normal": 1.0, "strong": 1.6}.get(s.get("image_enhance", "normal"), 1.0))
             post_id = uuid.uuid4().hex[:12]
             worker.upload_image(post_id, card)
             hashtags = clean_hashtags(data.get("hashtags", []), s.get("fixed_hashtags", []), int(s.get("hashtag_count", 9)))

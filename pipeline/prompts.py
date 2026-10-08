@@ -93,30 +93,56 @@ Scene rules:
    anywhere in the image. Screens and papers are blurred or unreadable. Sacks, boxes, bottles,
    packaging, vehicles and shop fronts are plain and unbranded.
 7. COMPOSITION FOR THE CARD. Vertical 4:5 frame. Main subject fills the upper and middle part.
-   The bottom third is calm and darker (road, floor, table top, ground, water) because the
+   The bottom third is simple and uncluttered (road, floor, table top, ground, water) because the
    headline is printed there.
-8. PHOTO STYLE. {image_style}. Say the time of day, light and weather that fit the story.
-
-Write image_prompt as ONE paragraph of 70 to 120 words in this order: shot type and angle ->
-main subject with its story details -> real location -> supporting details -> time, light and
-weather -> mood -> "photorealistic news photograph, no text".
+8. BRIGHT, VIBRANT AND BEAUTIFUL. The picture must look bright, colourful and attractive at first
+   glance: clear daylight or warm golden-hour sun, a blue sky with a few white clouds when outdoors,
+   brightly lit interiors, vivid but natural saturated colours, high clarity, crisp detail, a clean
+   professional magazine-cover look. Avoid dark, dim, gloomy, foggy, hazy, smoky, grey or night
+   scenes. Use night only when the story itself happens at night, and then make it brightly lit
+   with vivid colourful lights. Style: {image_style}.
+9. FLAGS. Show a national flag only when it belongs to the story (government, diplomacy, defence,
+   trade between countries, national events): at most two, large and clearly visible, flying on a
+   flagpole against the sky or standing on a desk stand. Put the ISO country code of every flag in
+   scene.flags (e.g. ["PK"] or ["PK", "CN"]); the system adds the exact flag design itself. Never
+   show flags of organisations (IMF, UN, World Bank, political parties).
+10. OFFICIAL BUILDINGS AND LANDMARKS. When the story names an institution or place with a famous
+   building, show that real building in bright daylight and describe its true look (shape,
+   materials, colours, surroundings) and put its name in scene.landmark. Known looks:
+   - Parliament House, Islamabad: long white marble modernist building with a flat roof and a wide
+     facade of tall slender columns, broad steps, green lawns and fountains, Margalla Hills behind.
+   - Supreme Court of Pakistan, Islamabad: monumental white marble building with a tall central
+     recessed entrance framed by stepped, terraced arches, symmetrical wings, wide stairs and palms.
+   - Faisal Mosque, Islamabad: white tent-shaped concrete prayer hall with four tall slim pencil
+     minarets, at the foot of the green Margalla Hills.
+   - Pakistan Monument, Islamabad: four large granite petal-shaped walls opening like a flower on a hill.
+   - Minar-e-Pakistan, Lahore: tall white tapering tower with a flared lotus-like base on a raised
+     platform in a green park.
+   - Badshahi Mosque, Lahore: red sandstone mosque with three white marble domes and four tall minarets.
+   - Mazar-e-Quaid, Karachi: white marble cube-shaped mausoleum with a large white dome and tall
+     Moorish arches, on a raised platform in a wide garden.
+   - Karachi Port: blue water, large container ships, rows of colourful shipping containers and
+     tall gantry cranes.
+   If you are not sure how a named building looks, do not invent details: show a bright, accurate
+   view of the city instead (Islamabad's green avenues with the Margalla Hills, Karachi's busy
+   seafront avenues, Lahore's Mughal-era red brick and white marble) with the right flag.
 
 Examples of the planning (follow the method, do not copy them):
-- "Millers raise flour prices by Rs14 per kg in Karachi" -> eye-level shot inside a busy Karachi
-  flour shop: tall stacks of white woven flour sacks and 5kg bags, a steel weighing scale with
-  flour spilling on the counter, a chakki stone mill behind, warm tube lights at evening.
-- "Lahore traffic police impound van with 54 challans" -> a white Suzuki Bolan van parked inside a
-  Lahore traffic police station yard, a yellow wheel clamp on the front tyre, a thick stack of
-  printed challan slips on the bonnet, a police patrol car with blue lights behind, dusk.
-- "Pakistan, IMF reach staff-level agreement for $1.2bn" -> low-angle shot of the Finance Ministry
-  block of the Pak Secretariat in Islamabad, Pakistani flag on the roof against the Margalla Hills,
-  a polished meeting table in the foreground with two closed leather folders and a fountain pen,
-  morning light.
+- "Millers raise flour prices by Rs14 per kg in Karachi" -> eye-level shot inside a bright, clean
+  Karachi flour shop lit by daylight from the open shopfront: tall stacks of plain white woven flour
+  sacks and 5kg bags, a steel weighing scale with a heap of flour, golden wheat grains in a basket.
+- "Lahore traffic police impound van with 54 challans" -> a white Suzuki Bolan van parked in a sunny
+  Lahore traffic police station yard, a bright yellow wheel clamp on the front tyre, a thick stack of
+  challan slips on the bonnet, a police patrol car behind, blue sky.
+- "Pakistan, IMF reach staff-level agreement for $1.2bn" -> bright modern conference room in
+  Islamabad on a sunny morning: polished wooden table with two closed leather folders, a fountain pen
+  and neat bundles of US dollar notes, a Pakistani flag on a desk stand, large windows showing the
+  green Margalla Hills under a blue sky; flags ["PK"].
 
 Return JSON with exactly these keys, in this order:
 {{"headline": str, "highlights": [str], "paragraphs": [str], "hashtags": [str], "category": str,
-  "scene": {{"story_type": str, "main_subject": str, "location": str, "story_details": [str],
-             "time_light_weather": str, "camera": str}},
+  "scene": {{"story_type": str, "main_subject": str, "location": str, "landmark": str,
+             "story_details": [str], "flags": [str], "time_light_weather": str, "camera": str}},
   "image_prompt": str, "alt_text": str}}"""
 
 WRITE_USER = """Source: {source}
@@ -130,8 +156,8 @@ Article text:
 
 def image_suffix(people: str) -> str:
     """Appended to every image prompt so the hard rules survive even a weak model's output."""
-    base = ("Photorealistic editorial news photograph, sharp focus, natural colours, plain unbranded objects, "
-            "no readable text, no logos, no watermark.")
+    base = ("Bright, vibrant, colourful photorealistic editorial photograph, well lit, vivid natural colours, "
+            "crisp sharp detail, plain unbranded objects, no readable text, no logos, no watermark.")
     if people == "anonymous":
         return base + " No identifiable or famous people, no close-up faces."
     return base + " No people, no human figures."

@@ -13,6 +13,7 @@ import urllib.parse
 
 import requests
 
+from . import flags
 from .worker_api import WorkerAPI
 
 log = logging.getLogger("ai")
@@ -88,17 +89,30 @@ class TextAI:
         raise RuntimeError("all text models failed: " + " | ".join(errors))
 
 
-def generate_image(worker: WorkerAPI, prompt: str, preferred: str | None = None) -> tuple[bytes, str]:
+def generate_image(worker: WorkerAPI, prompt: str, preferred: str | None = None,
+                   flag_codes: list[str] | None = None) -> tuple[bytes, str]:
+    """Try each free image model. FLUX.2 models also get the real flag images as references."""
     models = [preferred] + [m for m in IMAGE_MODELS if m != preferred] if preferred else IMAGE_MODELS
+    refs: list[str] = []
     errors = []
     for model in models:
+        use_refs = "flux-2" in model and bool(flag_codes)
+        flag_text, used = flags.flag_prompt(flag_codes or [], with_reference=use_refs)
+        if use_refs and not refs:
+            refs = flags.flag_images(used)
+        if use_refs and len(refs) != len(used):
+            flag_text, used = flags.flag_prompt(flag_codes or [], with_reference=False)
+        full = f"{prompt} {flag_text}".strip()
         try:
-            return worker.generate_image(prompt, 1024, 1232, model), model
+            image = worker.generate_image(full, 1024, 1232, model, refs if use_refs and refs else None)
+            return image, model + (" +flag refs" if use_refs and refs else "")
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{model}: {exc}")
             log.warning("image model failed: %s", exc)
     try:
-        url = ("https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt[:900])
+        flag_text, _ = flags.flag_prompt(flag_codes or [], with_reference=False)
+        full = f"{prompt} {flag_text}".strip()
+        url = ("https://image.pollinations.ai/prompt/" + urllib.parse.quote(full[:1200])
                + "?width=1024&height=1232&nologo=true&model=flux&seed=" + str(int(time.time()) % 100000))
         r = requests.get(url, timeout=180)
         if r.ok and r.headers.get("content-type", "").startswith("image/"):
