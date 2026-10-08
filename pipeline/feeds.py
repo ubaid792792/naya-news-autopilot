@@ -17,6 +17,8 @@ log = logging.getLogger("feeds")
 
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/128.0 Safari/537.36")
+BOILERPLATE = re.compile(r"cookie|subscribe|get the latest|follow us|google news|whatsapp channel|"
+                         r"click here|all rights reserved|copyrighted|may not be published|stories in google search", re.I)
 STOPWORDS = set("a an the of in on at to for and or but with from by as is are was were be after over".split())
 
 
@@ -94,9 +96,17 @@ def fetch_article_text(url: str, limit: int = 6000) -> str:
     soup = BeautifulSoup(r.text, "lxml")
     for tag in soup(["script", "style", "nav", "header", "footer", "aside", "form", "figure", "noscript"]):
         tag.decompose()
-    root = soup.find("article") or soup.find(attrs={"itemprop": "articleBody"}) or soup.body or soup
-    paras = [re.sub(r"\s+", " ", p.get_text(" ")).strip() for p in root.find_all("p")]
-    paras = [p for p in paras if len(p) > 60 and "cookie" not in p.lower()]
+    # The story body is the element whose own <p> children hold the most text; this skips
+    # author bios and "related stories" blocks that sit in separate containers.
+    best, best_len = None, 0
+    for el in soup.find_all(["article", "div", "section", "main"]):
+        own = [p.get_text(" ", strip=True) for p in el.find_all("p", recursive=False)]
+        size = sum(len(t) for t in own if len(t) > 40)
+        if size > best_len:
+            best, best_len = el, size
+    root = best if best_len > 300 else (soup.find("article") or soup.body or soup)
+    paras = [re.sub(r"\s+", " ", p.get_text(" ")).strip() for p in root.find_all("p", recursive=root is not best)]
+    paras = [p for p in paras if len(p) > 60 and not BOILERPLATE.search(p)]
     text = "\n".join(paras)
     if len(text) < 200:
         meta = soup.find("meta", attrs={"property": "og:description"}) or soup.find("meta", attrs={"name": "description"})

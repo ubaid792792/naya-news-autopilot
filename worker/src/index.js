@@ -26,8 +26,9 @@ const DEFAULTS = {
   source_credit: "none",
   image_model: "@cf/black-forest-labs/flux-2-klein-4b",
   image_style:
-    "photorealistic editorial news photography, cinematic natural light, rich realistic colours, shallow depth of field",
+    "documentary photojournalism, shot on a full-frame camera with a 35mm lens, natural light, realistic colours, fine detail",
   image_ai_label: false,
+  people_in_images: "none",
   accent_color: "#FFC72C",
   footer_icons: ["facebook", "instagram", "x", "linkedin", "web"],
   footer_handle: "",
@@ -173,6 +174,7 @@ function cleanSettingsPatch(patch) {
   for (const k of ["active_start_hour", "active_end_hour"]) if (k in out) out[k] = Math.max(0, Math.min(24, Math.round(out[k])));
   if ("accent_color" in out && !/^#[0-9a-fA-F]{6}$/.test(out.accent_color)) throw new HttpError(400, "accent colour must look like #FFC72C");
   if ("source_credit" in out && !["none", "name", "link"].includes(out.source_credit)) throw new HttpError(400, "bad source_credit");
+  if ("people_in_images" in out && !["none", "anonymous"].includes(out.people_in_images)) throw new HttpError(400, "bad people_in_images");
   return out;
 }
 

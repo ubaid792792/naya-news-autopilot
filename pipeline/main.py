@@ -109,6 +109,7 @@ def write_post(ai: TextAI, item: Item, s: dict) -> dict:
     system = prompts.WRITE_SYSTEM.format(
         brand=s["brand_name"], niche=s["niche"], language=s.get("language", "English"), tone=s["tone"],
         hashtag_count=s.get("hashtag_count", 9), image_style=s.get("image_style", ""),
+        people_rule=prompts.PEOPLE_RULES.get(s.get("people_in_images", "none"), prompts.PEOPLE_RULES["none"]),
         fixed_tags=(" Always include: " + " ".join(fixed) + ".") if fixed else "")
     user = prompts.WRITE_USER.format(
         source=item.source, title=item.title, link=item.link,
@@ -185,7 +186,8 @@ def main() -> int:
                     break
                 seen_items.append({"guid": item.guid, "title_key": item.title_key})
                 continue
-            prompt = data["image_prompt"].strip() + " Photorealistic editorial photo, no people, no text."
+            prompt = data["image_prompt"].strip() + " " + prompts.image_suffix(s.get("people_in_images", "none"))
+            log.info("scene: %s", data.get("scene"))
             bg, image_model = generate_image(worker, prompt, s.get("image_model"))
             if image_model == "pollinations":  # trim the corner watermark
                 im = Image.open(io.BytesIO(bg))

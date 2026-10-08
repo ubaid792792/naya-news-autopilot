@@ -100,20 +100,32 @@ class Token:
 
 
 def _tokenize(headline: str, highlights: list[str]) -> list[Token]:
+    """Split into words; each highlighted phrase becomes one unbreakable token so its box never splits."""
     words = headline.split()
-    flags = [False] * len(words)
+    group = [-1] * len(words)
     norm = [re.sub(r"[^\w%₨$]", "", w).lower() for w in words]
-    for phrase in highlights or []:
-        target = [re.sub(r"[^\w%₨$]", "", w).lower() for w in phrase.split()]
-        target = [t for t in target if t]
+    for gi, phrase in enumerate(highlights or []):
+        target = [t for t in (re.sub(r"[^\w%₨$]", "", w).lower() for w in phrase.split()) if t]
         if not target:
             continue
         for i in range(len(words) - len(target) + 1):
-            if norm[i:i + len(target)] == target:
+            if norm[i:i + len(target)] == target and all(g == -1 for g in group[i:i + len(target)]):
                 for k in range(i, i + len(target)):
-                    flags[k] = True
+                    group[k] = gi
                 break
-    return [Token(w, f) for w, f in zip(words, flags)]
+    tokens: list[Token] = []
+    i = 0
+    while i < len(words):
+        if group[i] >= 0:
+            j = i
+            while j + 1 < len(words) and group[j + 1] == group[i]:
+                j += 1
+            tokens.append(Token(" ".join(words[i:j + 1]), True))
+            i = j + 1
+        else:
+            tokens.append(Token(words[i], False))
+            i += 1
+    return tokens
 
 
 def _wrap(tokens: list[Token], font: ImageFont.FreeTypeFont, max_width: int) -> list[list[Token]]:
