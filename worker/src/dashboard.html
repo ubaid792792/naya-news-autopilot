@@ -1,0 +1,468 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Naya News Autopilot</title>
+<style>
+  :root {
+    --bg:#f4f5f7; --card:#ffffff; --text:#16181d; --muted:#6b7280; --line:#e5e7eb; --soft:#f0f1f4;
+    --accent:#FFC72C; --ink:#16181d; --ok:#15803d; --okbg:#dcfce7; --warn:#a16207; --warnbg:#fef9c3;
+    --bad:#b91c1c; --badbg:#fee2e2; --info:#1d4ed8; --infobg:#dbeafe;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0f1115; --card:#171a21; --text:#eceef2; --muted:#9aa1ad; --line:#2a2f3a; --soft:#1f232c;
+      --ink:#eceef2; --ok:#4ade80; --okbg:#12301f; --warn:#facc15; --warnbg:#2f2a10; --bad:#f87171; --badbg:#3a1616;
+      --info:#93c5fd; --infobg:#132544; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  a { color:inherit; }
+  header { position:sticky; top:0; z-index:5; background:var(--card); border-bottom:1px solid var(--line); }
+  .bar { max-width:1180px; margin:0 auto; padding:12px 16px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .brand { display:flex; align-items:center; gap:10px; margin-right:auto; }
+  .mark { width:36px; height:36px; border-radius:10px; background:var(--accent); color:#111; display:grid; place-items:center; font-weight:800; font-size:19px; }
+  .brand b { font-size:16px; } .brand small { display:block; color:var(--muted); font-size:12px; margin-top:-2px; }
+  main { max-width:1180px; margin:0 auto; padding:18px 16px 60px; }
+  button, .btn { font:inherit; font-weight:600; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--text);
+    padding:8px 14px; cursor:pointer; white-space:nowrap; }
+  button:hover { border-color:var(--muted); }
+  button.primary { background:var(--ink); color:var(--card); border-color:var(--ink); }
+  button.go { background:var(--ok); color:#fff; border-color:var(--ok); }
+  button.stop { background:var(--bad); color:#fff; border-color:var(--bad); }
+  button.small { padding:5px 10px; font-size:13px; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .pill { display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border-radius:999px; font-size:12px; font-weight:700; }
+  .pill::before { content:""; width:7px; height:7px; border-radius:50%; background:currentColor; }
+  .s-ok { color:var(--ok); background:var(--okbg); } .s-warn { color:var(--warn); background:var(--warnbg); }
+  .s-bad { color:var(--bad); background:var(--badbg); } .s-info { color:var(--info); background:var(--infobg); }
+  .s-muted { color:var(--muted); background:var(--soft); }
+  .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:16px; }
+  .stat { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px 16px; min-width:0; }
+  .stat .k { color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
+  .stat .v { font-size:20px; font-weight:700; margin-top:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .stat .d { color:var(--muted); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .notice { background:var(--warnbg); color:var(--text); border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin-bottom:16px; }
+  .notice b { color:var(--warn); }
+  nav.tabs { display:flex; gap:4px; border-bottom:1px solid var(--line); margin-bottom:16px; overflow-x:auto; }
+  nav.tabs button { border:0; border-radius:0; background:none; padding:10px 14px; color:var(--muted); border-bottom:2px solid transparent; }
+  nav.tabs button.on { color:var(--text); border-bottom-color:var(--accent); }
+  .panel { display:none; } .panel.on { display:block; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:14px; }
+  .card h3 { margin:0 0 4px; font-size:15px; } .card p.help { margin:0 0 12px; color:var(--muted); font-size:13px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  input, select, textarea { font:inherit; color:var(--text); background:var(--card); border:1px solid var(--line); border-radius:10px; padding:8px 10px; width:100%; }
+  textarea { min-height:80px; resize:vertical; }
+  .grid2 { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px 16px; }
+  .grid3 { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px 16px; }
+  .field label { display:block; font-size:12px; font-weight:600; color:var(--muted); margin-bottom:4px; }
+  .field .hint { font-size:12px; color:var(--muted); margin-top:3px; }
+  .switch { display:flex; align-items:center; gap:10px; cursor:pointer; user-select:none; }
+  .switch input { display:none; }
+  .switch i { width:38px; height:22px; border-radius:999px; background:var(--line); position:relative; flex:none; transition:.15s; }
+  .switch i::after { content:""; position:absolute; top:3px; left:3px; width:16px; height:16px; border-radius:50%; background:#fff; transition:.15s; }
+  .switch input:checked + i { background:var(--ok); } .switch input:checked + i::after { left:19px; }
+  .posts { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:14px; }
+  .post { background:var(--card); border:1px solid var(--line); border-radius:14px; overflow:hidden; display:flex; flex-direction:column; }
+  .post .img { aspect-ratio:1080/1300; background:var(--soft); display:block; width:100%; object-fit:cover; }
+  .post .body { padding:12px 14px; display:flex; flex-direction:column; gap:8px; flex:1; }
+  .post .meta { display:flex; justify-content:space-between; gap:8px; align-items:center; color:var(--muted); font-size:12px; }
+  .post h4 { margin:0; font-size:15px; line-height:1.35; }
+  .post .src { color:var(--muted); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .caption { white-space:pre-wrap; font-size:13px; color:var(--text); max-height:7.5em; overflow:hidden; position:relative; }
+  .caption.open { max-height:none; }
+  .post .err { color:var(--bad); font-size:12px; }
+  .post .actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:auto; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:left; padding:9px 8px; border-bottom:1px solid var(--line); vertical-align:top; font-size:13px; }
+  th { color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.03em; }
+  td.url { max-width:360px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--muted); }
+  .tablewrap { overflow-x:auto; }
+  pre.log { white-space:pre-wrap; font-size:12px; background:var(--soft); padding:10px; border-radius:10px; max-height:420px; overflow:auto; margin:6px 0 0; }
+  .empty { color:var(--muted); text-align:center; padding:30px 10px; }
+  .assets { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+  .asset-prev { height:150px; border:1px dashed var(--line); border-radius:12px; display:grid; place-items:center; background:repeating-conic-gradient(var(--soft) 0% 25%, transparent 0% 50%) 50%/20px 20px; margin-bottom:8px; overflow:hidden; }
+  .asset-prev img { max-width:100%; max-height:100%; }
+  .chan { display:flex; align-items:center; gap:12px; padding:10px 0; border-bottom:1px solid var(--line); }
+  .chan img { width:36px; height:36px; border-radius:50%; background:var(--soft); }
+  .chan .n { flex:1; } .chan .n small { display:block; color:var(--muted); }
+  #toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:var(--ink); color:var(--card); padding:10px 16px; border-radius:10px;
+    font-weight:600; opacity:0; pointer-events:none; transition:.2s; max-width:calc(100% - 32px); z-index:20; }
+  #toast.on { opacity:1; }
+  @media (max-width:860px) { .stats { grid-template-columns:repeat(2,1fr); } .grid3 { grid-template-columns:1fr 1fr; } }
+  @media (max-width:560px) { .grid2, .grid3, .assets { grid-template-columns:1fr; } .bar .acts { width:100%; } .bar .acts button { flex:1; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <div class="brand"><div class="mark" id="mark">N</div><div><b id="brandName">Naya News</b><small>Autopilot control panel</small></div></div>
+    <span id="statusPill" class="pill s-muted">Loading</span>
+    <div class="row acts">
+      <button id="toggleBtn" class="go">Start</button>
+      <button id="runBtn" class="primary" title="Fetch news and publish now">Run now</button>
+      <button id="testBtn" title="Create a preview without publishing">Test run</button>
+      <button id="logoutBtn" class="small">Log out</button>
+    </div>
+  </div>
+</header>
+<main>
+  <div id="notices"></div>
+  <section class="stats">
+    <div class="stat"><div class="k">Next run</div><div class="v" id="stNext">-</div><div class="d" id="stNextD">-</div></div>
+    <div class="stat"><div class="k">Posted today</div><div class="v" id="stToday">-</div><div class="d" id="stTodayD">-</div></div>
+    <div class="stat"><div class="k">Last run</div><div class="v" id="stLast">-</div><div class="d" id="stLastD">-</div></div>
+    <div class="stat"><div class="k">Channels</div><div class="v" id="stChan">-</div><div class="d" id="stChanD">-</div></div>
+  </section>
+
+  <nav class="tabs" id="tabs">
+    <button data-tab="posts" class="on">Posts</button>
+    <button data-tab="feeds">News feeds</button>
+    <button data-tab="schedule">Schedule</button>
+    <button data-tab="content">Writing</button>
+    <button data-tab="design">Image design</button>
+    <button data-tab="channels">Channels</button>
+    <button data-tab="runs">Run history</button>
+  </nav>
+
+  <section class="panel on" id="p-posts">
+    <div class="card">
+      <h3>Make a post from one article</h3>
+      <p class="help">Paste a news article link. "Preview" creates the post here without publishing; "Publish" posts it straight away.</p>
+      <div class="row"><input id="artUrl" placeholder="https://www.dawn.com/news/..." style="flex:1;min-width:220px">
+        <button id="artTest">Preview</button><button id="artLive" class="primary">Publish</button></div>
+    </div>
+    <div class="posts" id="posts"></div>
+  </section>
+
+  <section class="panel" id="p-feeds">
+    <div class="card">
+      <h3>Add an RSS feed</h3>
+      <p class="help">Any RSS or Atom link. The system checks all enabled feeds on every run and picks the best fresh story.</p>
+      <div class="grid3">
+        <div class="field"><label>Feed URL</label><input id="fUrl" placeholder="https://example.com/feed"></div>
+        <div class="field"><label>Name (optional)</label><input id="fName" placeholder="Dawn Business"></div>
+        <div class="field"><label>Category (optional)</label><input id="fCat" placeholder="Business"></div>
+      </div>
+      <div class="row" style="margin-top:12px"><button id="fAdd" class="primary">Add feed</button></div>
+    </div>
+    <div class="card tablewrap"><table><thead><tr><th>On</th><th>Feed</th><th>Category</th><th>Last check</th><th>Items</th><th></th></tr></thead><tbody id="feeds"></tbody></table></div>
+  </section>
+
+  <section class="panel" id="p-schedule">
+    <form class="card" data-form>
+      <h3>Schedule</h3>
+      <p class="help">The cloud scheduler checks every 5 minutes and starts a run when one is due. Times use the time zone below.</p>
+      <div class="grid3">
+        <div class="field"><label>Run every</label><select name="interval_minutes">
+          <option value="15">15 minutes</option><option value="30">30 minutes</option><option value="45">45 minutes</option>
+          <option value="60">1 hour</option><option value="90">1.5 hours</option><option value="120">2 hours</option>
+          <option value="180">3 hours</option><option value="240">4 hours</option><option value="360">6 hours</option>
+          <option value="480">8 hours</option><option value="720">12 hours</option><option value="1440">24 hours</option></select></div>
+        <div class="field"><label>Posts per run</label><input name="posts_per_run" type="number" min="1" max="5"></div>
+        <div class="field"><label>Max posts per day</label><input name="daily_cap" type="number" min="1" max="48"></div>
+        <div class="field"><label>Active from (hour)</label><select name="active_start_hour" data-hours></select></div>
+        <div class="field"><label>Active until (hour)</label><select name="active_end_hour" data-hours></select></div>
+        <div class="field"><label>Time zone</label><select name="tz_offset_minutes">
+          <option value="300">Pakistan (PKT, UTC+5)</option><option value="0">UTC</option><option value="240">Gulf (UTC+4)</option>
+          <option value="180">Saudi Arabia (UTC+3)</option><option value="60">UK winter (UTC+1)</option><option value="330">India (UTC+5:30)</option></select></div>
+        <div class="field"><label>Only use news newer than (hours)</label><input name="max_article_age_hours" type="number" min="1" max="168"></div>
+      </div>
+      <div style="margin-top:14px"><label class="switch"><input type="checkbox" name="approval_mode"><i></i>
+        <span><b>Approval mode</b> - scheduled runs create drafts that wait for your "Publish" click instead of posting automatically</span></label></div>
+      <div class="row" style="margin-top:14px"><button class="primary" type="submit">Save schedule</button></div>
+    </form>
+  </section>
+
+  <section class="panel" id="p-content">
+    <form class="card" data-form>
+      <h3>Writing style</h3>
+      <p class="help">How the AI rewrites each story (3 to 5 sentences, Startup Pakistan style).</p>
+      <div class="grid2">
+        <div class="field"><label>Brand name</label><input name="brand_name"></div>
+        <div class="field"><label>Language</label><input name="language"></div>
+        <div class="field" style="grid-column:1/-1"><label>Audience and topics</label><textarea name="niche"></textarea><div class="hint">Used to pick which stories to post.</div></div>
+        <div class="field" style="grid-column:1/-1"><label>Tone</label><input name="tone"></div>
+        <div class="field"><label>Number of hashtags</label><input name="hashtag_count" type="number" min="0" max="20"></div>
+        <div class="field"><label>Always add these hashtags</label><input name="fixed_hashtags" placeholder="#NayaNews"></div>
+        <div class="field" style="grid-column:1/-1"><label>Disclaimer line</label><textarea name="disclaimer" style="min-height:60px"></textarea></div>
+        <div class="field"><label>Credit the source</label><select name="source_credit"><option value="none">No (Startup Pakistan style)</option>
+          <option value="name">Name only ("Source: Dawn")</option><option value="link">Name and link</option></select></div>
+        <div class="field"><label>Text AI models (in order)</label><input name="text_models"><div class="hint">Free Gemini models, then Cloudflare AI as backup.</div></div>
+      </div>
+      <div class="row" style="margin-top:14px"><button class="primary" type="submit">Save writing style</button></div>
+    </form>
+  </section>
+
+  <section class="panel" id="p-design">
+    <form class="card" data-form>
+      <h3>Image design</h3>
+      <p class="help">Each image: AI picture of the story (no people), your logo top-left, the headline with highlighted key words, social icons at the bottom.</p>
+      <div class="grid3">
+        <div class="field"><label>Highlight colour</label><input name="accent_color" type="color" style="height:40px;padding:4px"></div>
+        <div class="field"><label>Image AI model</label><select name="image_model">
+          <option value="@cf/black-forest-labs/flux-2-klein-4b">FLUX.2 klein (best, ~60/day free)</option>
+          <option value="@cf/black-forest-labs/flux-1-schnell">FLUX.1 schnell (more per day)</option></select></div>
+        <div class="field"><label>Footer text (optional)</label><input name="footer_handle" placeholder="nayanews.pk"></div>
+        <div class="field" style="grid-column:1/-1"><label>Picture style</label><textarea name="image_style" style="min-height:60px"></textarea></div>
+        <div class="field" style="grid-column:1/-1"><label>Footer icons</label><div class="row" id="iconChecks"></div></div>
+        <div class="field"><label>Keep images for (days)</label><input name="image_retention_days" type="number" min="2" max="60"><div class="hint">Auto-deleted after this.</div></div>
+      </div>
+      <div style="margin-top:12px"><label class="switch"><input type="checkbox" name="image_ai_label"><i></i><span>Print a small "AI-generated image" tag on the picture</span></label></div>
+      <div class="row" style="margin-top:14px"><button class="primary" type="submit">Save design</button></div>
+    </form>
+    <div class="card">
+      <h3>Logo and frame</h3>
+      <p class="help">Logo: transparent PNG, shown top-left (until you upload one, a text logo is drawn). Frame: optional transparent PNG, 1080x1300, laid over the whole image.</p>
+      <div class="assets">
+        <div><div class="asset-prev" id="logoPrev">No logo uploaded</div><div class="row"><input type="file" accept="image/png" id="logoFile" style="flex:1"><button class="small" id="logoDel">Remove</button></div></div>
+        <div><div class="asset-prev" id="framePrev">No frame uploaded</div><div class="row"><input type="file" accept="image/png" id="frameFile" style="flex:1"><button class="small" id="frameDel">Remove</button></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" id="p-channels">
+    <div class="card">
+      <h3>Where posts go</h3>
+      <p class="help">Posts are published through your free Buffer account. To add a network, connect it in Buffer first (publish.buffer.com), then press Refresh.</p>
+      <div class="row" style="margin-bottom:8px"><button id="chRefresh" class="primary">Refresh from Buffer</button>
+        <a class="btn" href="https://publish.buffer.com/channels/connect" target="_blank" rel="noopener">Open Buffer</a></div>
+      <div id="channels"></div>
+    </div>
+  </section>
+
+  <section class="panel" id="p-runs">
+    <div class="card tablewrap"><table><thead><tr><th>Started</th><th>Type</th><th>Status</th><th>Result</th><th>Logs</th></tr></thead><tbody id="runs"></tbody></table></div>
+  </section>
+</main>
+<div id="toast"></div>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+let state = null, pollTimer = null;
+
+function toast(msg, ms = 3200) { const t = $('#toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('on'), ms); }
+async function api(path, opts = {}) {
+  const r = await fetch(path, { ...opts, headers: { ...(opts.body && !(opts.body instanceof Blob) && !(opts.body instanceof File) ? { 'content-type': 'application/json' } : {}), ...(opts.headers || {}) } });
+  if (r.status === 401) { location.reload(); throw new Error('Session expired'); }
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+  return data;
+}
+const post = (path, data) => api(path, { method: 'POST', body: JSON.stringify(data || {}) });
+function ago(iso) {
+  if (!iso) return '-';
+  const s = (Date.now() - Date.parse(iso)) / 1000;
+  if (s < -60) { const m = Math.round(-s / 60); return m < 60 ? 'in ' + m + ' min' : 'in ' + (m / 60).toFixed(1) + ' h'; }
+  if (s < 60) return 'just now'; if (s < 3600) return Math.round(s / 60) + ' min ago';
+  if (s < 86400) return Math.round(s / 3600) + ' h ago'; return Math.round(s / 86400) + ' d ago';
+}
+const when = (iso) => iso ? new Date(iso).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '-';
+const STATUS = { published:'s-ok', partial:'s-warn', publishing:'s-info', draft:'s-warn', test:'s-info', failed:'s-bad',
+  success:'s-ok', running:'s-info', dispatched:'s-info', empty:'s-muted', skipped:'s-muted', error:'s-bad', timeout:'s-bad' };
+const LABEL = { test:'preview', draft:'needs approval', dispatched:'starting', empty:'no new news' };
+const pill = (st) => '<span class="pill ' + (STATUS[st] || 's-muted') + '">' + esc(LABEL[st] || st || '-') + '</span>';
+
+async function load() {
+  try { state = await api('/api/state'); render(); } catch (e) { toast(e.message); }
+  clearTimeout(pollTimer);
+  const busy = state && state.runs.some(r => r.status === 'running' || r.status === 'dispatched');
+  pollTimer = setTimeout(load, busy ? 5000 : 30000);
+}
+
+function render() {
+  const s = state.settings;
+  document.documentElement.style.setProperty('--accent', s.accent_color || '#FFC72C');
+  $('#brandName').textContent = s.brand_name; $('#mark').textContent = (s.brand_name || 'N')[0].toUpperCase();
+  const busy = state.runs.find(r => r.status === 'running' || r.status === 'dispatched');
+  $('#statusPill').className = 'pill ' + (busy ? 's-info' : s.enabled ? 's-ok' : 's-muted');
+  $('#statusPill').textContent = busy ? 'Run in progress' : s.enabled ? 'Automatic posting ON' : 'Paused';
+  const tb = $('#toggleBtn'); tb.textContent = s.enabled ? 'Pause' : 'Start'; tb.className = s.enabled ? 'stop' : 'go';
+  $('#runBtn').disabled = $('#testBtn').disabled = !!busy;
+
+  $('#stNext').textContent = s.enabled ? (state.stats.next_run ? ago(state.stats.next_run) : '-') : 'Paused';
+  $('#stNextD').textContent = 'every ' + (s.interval_minutes >= 60 ? (s.interval_minutes / 60) + ' h' : s.interval_minutes + ' min') + ', ' + s.active_start_hour + ':00-' + s.active_end_hour + ':00';
+  $('#stToday').textContent = state.stats.published_today + ' / ' + s.daily_cap;
+  $('#stTodayD').textContent = state.stats.published_total + ' published in total';
+  const last = state.runs[0];
+  $('#stLast').innerHTML = last ? pill(last.status) : '-';
+  $('#stLastD').textContent = last ? ago(last.started_at) + ' - ' + (last.summary || last.trigger) : 'No runs yet';
+  const chans = (s.buffer_channels || []);
+  const on = chans.filter(c => c.enabled);
+  $('#stChan').textContent = on.length + ' active';
+  $('#stChanD').textContent = on.map(c => c.service + ': ' + c.name).join(', ') || 'Connect in Buffer, then Refresh';
+
+  const notes = [];
+  if (!state.config.buffer) notes.push('<b>Buffer key missing.</b> Publishing is disabled until BUFFER_API_KEY is set on the Worker.');
+  else if (!chans.length) notes.push('<b>No channel yet.</b> Connect LinkedIn in Buffer, then open the Channels tab and press "Refresh from Buffer".');
+  if (!state.config.github) notes.push('<b>GitHub not linked.</b> Runs cannot start until GH_TOKEN is set on the Worker.');
+  $('#notices').innerHTML = notes.map(n => '<div class="notice">' + n + '</div>').join('');
+
+  renderPosts(); renderFeeds(); renderRuns(); renderChannels(); fillForms(); renderAssets();
+}
+
+function renderPosts() {
+  const el = $('#posts');
+  if (!state.posts.length) { el.innerHTML = '<div class="empty card" style="grid-column:1/-1">No posts yet. Press <b>Test run</b> to create a preview.</div>'; return; }
+  el.innerHTML = state.posts.map(p => {
+    const errs = (p.channel_results || []).filter(r => !r.ok).map(r => esc(r.channel + ': ' + r.error)).join('<br>') || esc(p.error || '');
+    const canPublish = ['test', 'draft', 'failed', 'partial'].includes(p.status);
+    return '<article class="post" data-id="' + esc(p.id) + '">' +
+      (p.image_url ? '<a href="' + esc(p.image_url) + '" target="_blank" rel="noopener"><img class="img" loading="lazy" src="' + esc(p.image_url) + '" alt="' + esc(p.alt_text || p.headline) + '" onerror="this.replaceWith(Object.assign(document.createElement(\'div\'),{className:\'img\'}))"></a>' : '') +
+      '<div class="body"><div class="meta">' + pill(p.status) + '<span title="' + esc(when(p.created_at)) + '">' + ago(p.created_at) + '</span></div>' +
+      '<h4>' + esc(p.headline) + '</h4>' +
+      (p.source_url ? '<a class="src" href="' + esc(p.source_url) + '" target="_blank" rel="noopener">' + esc((p.source_name || '') + ' - ' + (p.source_title || p.source_url)) + '</a>' : '') +
+      '<div class="caption">' + esc(p.caption) + '</div>' +
+      (errs && p.status !== 'published' ? '<div class="err">' + errs + '</div>' : '') +
+      '<div class="actions">' +
+        (canPublish ? '<button class="small go" data-act="publish">Publish</button>' : '') +
+        '<button class="small" data-act="more">Show more</button>' +
+        '<button class="small" data-act="copy">Copy text</button>' +
+        (p.status !== 'published' ? '<button class="small" data-act="edit">Edit text</button>' : '') +
+        '<button class="small" data-act="delete">Delete</button>' +
+      '</div></div></article>';
+  }).join('');
+}
+
+function renderFeeds() {
+  const el = $('#feeds');
+  if (!state.feeds.length) { el.innerHTML = '<tr><td colspan="6" class="empty">No feeds yet.</td></tr>'; return; }
+  el.innerHTML = state.feeds.map(f => '<tr data-id="' + f.id + '">' +
+    '<td><label class="switch"><input type="checkbox" data-act="feedToggle"' + (f.enabled ? ' checked' : '') + '><i></i></label></td>' +
+    '<td><b>' + esc(f.name || '(no name)') + '</b><div class="url"><a href="' + esc(f.url) + '" target="_blank" rel="noopener" style="color:var(--muted)">' + esc(f.url) + '</a></div>' +
+      (f.last_error ? '<div style="color:var(--bad);font-size:12px">' + esc(f.last_error) + '</div>' : '') + '</td>' +
+    '<td>' + esc(f.category || '-') + '</td><td>' + ago(f.last_fetched_at) + '</td><td>' + (f.last_count ?? '-') + '</td>' +
+    '<td><button class="small" data-act="feedDel">Remove</button></td></tr>').join('');
+}
+
+function renderRuns() {
+  const el = $('#runs');
+  if (!state.runs.length) { el.innerHTML = '<tr><td colspan="5" class="empty">No runs yet.</td></tr>'; return; }
+  el.innerHTML = state.runs.map(r => {
+    const dur = r.finished_at ? Math.round((Date.parse(r.finished_at) - Date.parse(r.started_at)) / 1000) + 's' : '';
+    return '<tr><td title="' + esc(when(r.started_at)) + '">' + ago(r.started_at) + '<div style="color:var(--muted);font-size:12px">' + esc(dur) + '</div></td>' +
+      '<td>' + esc(r.trigger) + '<div style="color:var(--muted);font-size:12px">' + esc(r.mode === 'test' ? 'preview' : 'live') + '</div></td>' +
+      '<td>' + pill(r.status) + '</td><td>' + esc(r.summary || '') + '</td>' +
+      '<td>' + (r.gh_run_url ? '<a href="' + esc(r.gh_run_url) + '" target="_blank" rel="noopener">GitHub log</a>' : '-') + '</td></tr>';
+  }).join('');
+}
+
+function renderChannels() {
+  const chans = state.settings.buffer_channels || [];
+  $('#channels').innerHTML = chans.length ? chans.map(c => '<div class="chan" data-id="' + esc(c.id) + '">' +
+    '<img src="' + esc(c.avatar || '') + '" alt="" onerror="this.style.visibility=\'hidden\'">' +
+    '<div class="n"><b>' + esc(c.name) + '</b><small>' + esc(c.service) + ' - ' + esc(c.organization || '') + '</small></div>' +
+    '<label class="switch"><input type="checkbox" data-act="chanToggle"' + (c.enabled ? ' checked' : '') + '><i></i><span>Post here</span></label></div>').join('')
+    : '<div class="empty">No channels loaded yet.</div>';
+}
+
+const ICONS = ['facebook', 'instagram', 'x', 'linkedin', 'youtube', 'tiktok', 'threads', 'web'];
+let formsFilled = false;
+function fillForms() {
+  if (formsFilled) return; formsFilled = true;
+  const s = state.settings;
+  $$('select[data-hours]').forEach(sel => sel.innerHTML = Array.from({ length: 25 }, (_, h) => '<option value="' + h + '">' + String(h).padStart(2, '0') + ':00</option>').join(''));
+  $('#iconChecks').innerHTML = ICONS.map(i => '<label class="switch"><input type="checkbox" data-icon="' + i + '"><i></i><span>' + i + '</span></label>').join('');
+  $$('form[data-form] [name]').forEach(el => {
+    const v = s[el.name];
+    if (el.type === 'checkbox') el.checked = !!v;
+    else el.value = Array.isArray(v) ? v.join(', ') : (v ?? '');
+  });
+  $$('[data-icon]').forEach(el => el.checked = (s.footer_icons || []).includes(el.dataset.icon));
+}
+
+function renderAssets() {
+  const v = Date.now();
+  $('#logoPrev').innerHTML = state.assets.logo ? '<img src="/asset/logo.png?v=' + v + '" alt="logo">' : 'No logo uploaded (text logo is used)';
+  $('#framePrev').innerHTML = state.assets.frame ? '<img src="/asset/frame.png?v=' + v + '" alt="frame">' : 'No frame uploaded';
+}
+
+// ---- events ----
+$('#tabs').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-tab]'); if (!b) return;
+  $$('#tabs button').forEach(x => x.classList.toggle('on', x === b));
+  $$('.panel').forEach(p => p.classList.toggle('on', p.id === 'p-' + b.dataset.tab));
+});
+$('#toggleBtn').onclick = async () => {
+  const enable = !state.settings.enabled;
+  try { await post('/api/toggle', { enabled: enable }); toast(enable ? 'Automatic posting started. First run within 5 minutes.' : 'Paused. No more automatic posts.'); load(); } catch (e) { toast(e.message); }
+};
+async function startRun(mode, articleUrl) {
+  try { await post('/api/run', { mode, article_url: articleUrl || '' }); toast(mode === 'live' ? 'Run started. The post appears here in 1-3 minutes.' : 'Preview started. It appears here in 1-3 minutes.'); load(); }
+  catch (e) { toast(e.message); }
+}
+$('#runBtn').onclick = () => { if (confirm('Publish a new post now to your connected channels?')) startRun('live'); };
+$('#testBtn').onclick = () => startRun('test');
+$('#artTest').onclick = () => { const u = $('#artUrl').value.trim(); if (!u) return toast('Paste an article link first'); startRun('test', u); };
+$('#artLive').onclick = () => { const u = $('#artUrl').value.trim(); if (!u) return toast('Paste an article link first'); if (confirm('Publish a post about this article now?')) startRun('live', u); };
+$('#logoutBtn').onclick = async () => { await post('/api/logout'); location.reload(); };
+
+$('#posts').addEventListener('click', async (e) => {
+  const b = e.target.closest('button[data-act]'); if (!b) return;
+  const card = b.closest('.post'); const id = card.dataset.id; const p = state.posts.find(x => x.id === id);
+  try {
+    if (b.dataset.act === 'more') { const c = $('.caption', card); c.classList.toggle('open'); b.textContent = c.classList.contains('open') ? 'Show less' : 'Show more'; }
+    if (b.dataset.act === 'copy') { await navigator.clipboard.writeText(p.caption); toast('Text copied'); }
+    if (b.dataset.act === 'publish') {
+      if (!confirm('Publish this post now?')) return;
+      b.disabled = true; const r = await post('/api/posts/' + id + '/publish');
+      toast(r.status === 'published' ? 'Published' : 'Problem: ' + (r.error || r.status)); load();
+    }
+    if (b.dataset.act === 'delete') { if (!confirm('Delete this post from the panel? (It is not removed from social media.)')) return; await api('/api/posts/' + id, { method: 'DELETE' }); load(); }
+    if (b.dataset.act === 'edit') {
+      const cap = $('.caption', card);
+      cap.outerHTML = '<textarea class="capEdit" style="min-height:220px">' + esc(p.caption) + '</textarea>';
+      b.textContent = 'Save text'; b.dataset.act = 'save';
+    } else if (b.dataset.act === 'save') {
+      await api('/api/posts/' + id, { method: 'PATCH', body: JSON.stringify({ caption: $('.capEdit', card).value }) }); toast('Saved'); load();
+    }
+  } catch (err) { toast(err.message); b.disabled = false; }
+});
+
+$('#fAdd').onclick = async () => {
+  try { await post('/api/feeds', { url: $('#fUrl').value, name: $('#fName').value, category: $('#fCat').value });
+    $('#fUrl').value = $('#fName').value = $('#fCat').value = ''; toast('Feed added'); load(); } catch (e) { toast(e.message); }
+};
+$('#feeds').addEventListener('click', async (e) => {
+  const el = e.target.closest('[data-act]'); if (!el) return;
+  const id = el.closest('tr').dataset.id;
+  try {
+    if (el.dataset.act === 'feedDel') { if (!confirm('Remove this feed?')) return; await api('/api/feeds/' + id, { method: 'DELETE' }); load(); }
+    if (el.dataset.act === 'feedToggle') { await api('/api/feeds/' + id, { method: 'PATCH', body: JSON.stringify({ enabled: el.checked }) }); toast(el.checked ? 'Feed on' : 'Feed off'); }
+  } catch (err) { toast(err.message); }
+});
+
+$('#chRefresh').onclick = async (e) => {
+  e.target.disabled = true;
+  try { const r = await post('/api/channels/refresh'); toast(r.channels.length + ' channel(s) found'); load(); } catch (err) { toast(err.message); }
+  e.target.disabled = false;
+};
+$('#channels').addEventListener('change', async (e) => {
+  const el = e.target.closest('[data-act="chanToggle"]'); if (!el) return;
+  try { await post('/api/channels', { id: el.closest('.chan').dataset.id, enabled: el.checked }); toast('Saved'); load(); } catch (err) { toast(err.message); }
+});
+
+$$('form[data-form]').forEach(f => f.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const data = {};
+  $$('[name]', f).forEach(el => data[el.name] = el.type === 'checkbox' ? el.checked : el.value);
+  if (f.querySelector('#iconChecks')) data.footer_icons = $$('[data-icon]').filter(x => x.checked).map(x => x.dataset.icon);
+  try { await post('/api/settings', data); toast('Saved'); formsFilled = false; load(); } catch (err) { toast(err.message); }
+}));
+
+for (const name of ['logo', 'frame']) {
+  $('#' + name + 'File').addEventListener('change', async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    try { await api('/api/assets/' + name, { method: 'PUT', body: file, headers: { 'content-type': 'image/png' } }); toast('Uploaded'); load(); } catch (err) { toast(err.message); }
+    e.target.value = '';
+  });
+  $('#' + name + 'Del').onclick = async () => { try { await api('/api/assets/' + name, { method: 'DELETE' }); toast('Removed'); load(); } catch (err) { toast(err.message); } };
+}
+
+load();
+</script>
+</body>
+</html>

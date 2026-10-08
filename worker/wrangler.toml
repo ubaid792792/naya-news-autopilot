@@ -1,0 +1,27 @@
+name = "naya-news-autopilot"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+workers_dev = true
+
+[ai]
+binding = "AI"
+
+[[kv_namespaces]]
+binding = "IMAGES"
+id = "REPLACE_KV_ID"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "naya-news-db"
+database_id = "REPLACE_D1_ID"
+
+[triggers]
+crons = ["*/5 * * * *"]
+
+[vars]
+GH_REPO = "ubaid792792/naya-news-autopilot"
+GH_WORKFLOW = "pipeline.yml"
+GH_REF = "main"
+
+[observability]
+enabled = true
