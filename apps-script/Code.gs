@@ -9,6 +9,8 @@ var POSTED = 'Posted';
 var Q_HEAD = ['Added', 'Title', 'Source', 'Link', 'Published', 'Category', 'Summary'];
 var P_HEAD = ['Posted', 'Result', 'Title', 'Source', 'Link', 'Image'];
 var POSTED_KEEP = 1000;
+// Optional: id of an existing spreadsheet to use (the long part of its link after /d/).
+var SHEET_ID = '';
 
 function doGet(e) {
   var p = (e && e.parameter) || {};
@@ -56,7 +58,7 @@ function ss_() {
   var active = SpreadsheetApp.getActiveSpreadsheet();
   if (active) return active;
   var props = PropertiesService.getScriptProperties();
-  var id = props.getProperty('SHEET_ID');
+  var id = SHEET_ID || props.getProperty('SHEET_ID');
   if (id) return SpreadsheetApp.openById(id);
   var created = SpreadsheetApp.create('Naya News Queue');
   created.setSpreadsheetTimeZone('Asia/Karachi');
