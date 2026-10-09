@@ -261,6 +261,7 @@ async function tick(env) {
     .bind(nowIso(), stale)
     .run();
   await dailyCleanup(env, s);
+  await syncSendingPosts(env).catch((err) => console.error("status sync failed", err.message));
 
   if (!s.enabled || !inActiveHours(s)) return;
   const last = s.last_dispatch_at ? Date.parse(s.last_dispatch_at) : 0;
@@ -276,6 +277,35 @@ async function tick(env) {
   }
 }
 
+// Buffer accepts a post as "sending" and finishes a moment later; record the final result and the
+// LinkedIn link, or turn the post into a failure the panel can show.
+async function syncSendingPosts(env) {
+  if (!env.BUFFER_API_KEY) return;
+  const since = new Date(Date.now() - 3 * 3600000).toISOString();
+  const { results } = await env.DB.prepare(
+    "SELECT id, channel_results FROM posts WHERE status IN ('published','partial') AND published_at > ? AND channel_results LIKE '%\"buffer_status\":\"sending\"%'",
+  ).bind(since).all();
+  for (const post of results.slice(0, 5)) {
+    const list = JSON.parse(post.channel_results || "[]");
+    for (const r of list) {
+      if (!r.buffer_post_id || r.buffer_status !== "sending") continue;
+      const data = await buffer(env, `query { post(input: { id: ${gqlString(r.buffer_post_id)} }) { status externalLink error { message rawError } } }`);
+      const p = data.post;
+      r.buffer_status = p.status;
+      if (p.externalLink) r.link = p.externalLink;
+      if (p.status === "error") {
+        r.ok = false;
+        r.error = (p.error && (p.error.rawError || p.error.message)) || "Buffer could not publish the post";
+      }
+    }
+    const okCount = list.filter((r) => r.ok).length;
+    const status = okCount === list.length ? "published" : okCount ? "partial" : "failed";
+    const error = list.filter((r) => !r.ok).map((r) => `${r.channel}: ${r.error}`).join("; ") || null;
+    await env.DB.prepare("UPDATE posts SET status = ?, error = ?, channel_results = ? WHERE id = ?")
+      .bind(status, error, JSON.stringify(list), post.id).run();
+  }
+}
+
 async function dailyCleanup(env, s) {
   const today = localDate(s).toISOString().slice(0, 10);
   if (s.last_cleanup_date === today) return;
@@ -285,6 +315,7 @@ async function dailyCleanup(env, s) {
     env.DB.prepare("DELETE FROM seen WHERE seen_at < ?").bind(month),
     env.DB.prepare("DELETE FROM runs WHERE started_at < ?").bind(month),
     env.DB.prepare("DELETE FROM posts WHERE created_at < ?").bind(quarter),
+    env.DB.prepare("DELETE FROM images WHERE created_at < ?").bind(new Date(Date.now() - Math.max(2, s.image_retention_days) * 86400000).toISOString()),
   ]);
   await saveSettings(env, { last_cleanup_date: today });
 }
@@ -415,12 +446,16 @@ async function publishPost(env, origin, post, s) {
   const imageUrl = `${origin}/img/${post.id}.jpg`;
   const results = [];
   for (const ch of channels) {
-    const q = `mutation { createPost(input: { text: ${gqlString(post.caption)}, channelId: ${gqlString(ch.id)}, schedulingType: automatic, mode: shareNow, assets: [{ image: { url: ${gqlString(imageUrl)} } }] }) { __typename ... on PostActionSuccess { post { id status dueAt } } ... on MutationError { message } } }`;
+    const q = `mutation { createPost(input: { text: ${gqlString(post.caption)}, channelId: ${gqlString(ch.id)}, schedulingType: automatic, mode: shareNow, assets: [{ image: { url: ${gqlString(imageUrl)} } }] }) { __typename ... on PostActionSuccess { post { id status dueAt externalLink error { message rawError } } } ... on MutationError { message } } }`;
     try {
       const data = await buffer(env, q);
       const r = data.createPost;
-      if (r.post) results.push({ channel: ch.name, service: ch.service, ok: true, buffer_post_id: r.post.id, buffer_status: r.post.status });
-      else results.push({ channel: ch.name, service: ch.service, ok: false, error: r.message || r.__typename });
+      if (r.post && r.post.status !== "error") {
+        results.push({ channel: ch.name, service: ch.service, ok: true, buffer_post_id: r.post.id, buffer_status: r.post.status, link: r.post.externalLink || null });
+      } else if (r.post) {
+        const why = (r.post.error && (r.post.error.rawError || r.post.error.message)) || "Buffer could not publish the post";
+        results.push({ channel: ch.name, service: ch.service, ok: false, buffer_post_id: r.post.id, error: why });
+      } else results.push({ channel: ch.name, service: ch.service, ok: false, error: r.message || r.__typename });
     } catch (err) {
       results.push({ channel: ch.name, service: ch.service, ok: false, error: err.message });
     }
@@ -531,20 +566,27 @@ async function route(request, env) {
 
   // Public
   if (path === "/health") return json({ ok: true });
+  // Image hosts like Buffer probe with HEAD before downloading, so answer both.
+  const read = method === "GET" || method === "HEAD";
   let m = path.match(/^\/img\/([a-f0-9]{8,32})\.jpg$/);
-  if (m && method === "GET") {
-    const data = await env.IMAGES.get(`img:${m[1]}`, { type: "arrayBuffer", cacheTtl: 3600 });
-    if (!data) return new Response("not found", { status: 404 });
-    return new Response(data, { headers: { "content-type": "image/jpeg", "cache-control": "public, max-age=86400" } });
+  if (m && read) {
+    const row = await env.DB.prepare("SELECT data FROM images WHERE id = ?").bind(m[1]).first();
+    // D1 hands BLOBs back as an array of byte values; turn it back into raw bytes.
+    const data = row ? new Uint8Array(row.data) : await env.IMAGES.get(`img:${m[1]}`, { type: "arrayBuffer" });
+    if (!data) return new Response("not found", { status: 404, headers: { "cache-control": "no-store" } });
+    const bytes = data.byteLength ?? data.length;
+    return new Response(method === "HEAD" ? null : data, {
+      headers: { "content-type": "image/jpeg", "content-length": String(bytes), "cache-control": "public, max-age=86400" },
+    });
   }
   m = path.match(/^\/asset\/ref\/([A-Za-z0-9_]{2,40})$/);
-  if (m && method === "GET") {
+  if (m && read) {
     const obj = await env.IMAGES.getWithMetadata(`ref:${m[1]}`, { type: "arrayBuffer" });
     if (!obj.value) return new Response("not found", { status: 404 });
     return new Response(obj.value, { headers: { "content-type": obj.metadata?.type || "image/png", "cache-control": "no-cache" } });
   }
   m = path.match(/^\/asset\/(logo|frame)\.png$/);
-  if (m && method === "GET") {
+  if (m && read) {
     const data = await env.IMAGES.get(`asset:${m[1]}`, { type: "arrayBuffer" });
     if (!data) return new Response("not found", { status: 404 });
     return new Response(data, { headers: { "content-type": "image/png", "cache-control": "no-cache" } });
@@ -621,7 +663,8 @@ async function pipelineRoute(request, env, path, method, origin) {
     const s = await getSettings(env);
     const data = await request.arrayBuffer();
     if (data.byteLength < 1000 || data.byteLength > 5_000_000) throw new HttpError(400, "image size out of range");
-    await env.IMAGES.put(`img:${m[1]}`, data, { expirationTtl: Math.max(2, s.image_retention_days) * 86400 });
+    if (data.byteLength > 1_900_000) throw new HttpError(400, "image too large");
+    await env.DB.prepare("INSERT OR REPLACE INTO images (id, data, created_at) VALUES (?, ?, ?)").bind(m[1], data, nowIso()).run();
     return json({ url: `${origin}/img/${m[1]}.jpg` });
   }
   if (path === "/pipeline/posts" && method === "POST") {
@@ -746,8 +789,9 @@ async function panelRoute(request, env, path, method, origin) {
     if (!row) throw new HttpError(404, "post not found");
     if (m[2] && method === "POST") {
       if (row.status === "published") throw new HttpError(409, "Already published");
-      if (!(await env.IMAGES.get(`img:${row.id}`, { type: "stream" }).then((v) => (v ? (v.cancel(), true) : false))))
-        throw new HttpError(410, "Image has expired; run the pipeline again for this story");
+      const hasImage = (await env.DB.prepare("SELECT 1 AS x FROM images WHERE id = ?").bind(row.id).first()) ||
+        (await env.IMAGES.get(`img:${row.id}`, { type: "stream" }).then((v) => (v ? (v.cancel(), true) : false)));
+      if (!hasImage) throw new HttpError(410, "Image has expired; run the pipeline again for this story");
       const out = await applyPublish(env, origin, row, await getSettings(env));
       return json(out);
     }
@@ -758,7 +802,10 @@ async function panelRoute(request, env, path, method, origin) {
     }
     if (method === "DELETE") {
       await env.IMAGES.delete(`img:${row.id}`);
-      await env.DB.prepare("DELETE FROM posts WHERE id = ?").bind(row.id).run();
+      await env.DB.batch([
+        env.DB.prepare("DELETE FROM images WHERE id = ?").bind(row.id),
+        env.DB.prepare("DELETE FROM posts WHERE id = ?").bind(row.id),
+      ]);
       return json({ ok: true });
     }
   }

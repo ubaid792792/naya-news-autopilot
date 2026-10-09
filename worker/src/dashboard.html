@@ -367,6 +367,7 @@ function renderPosts() {
       (errs && p.status !== 'published' ? '<div class="err">' + errs + '</div>' : '') +
       '<div class="actions">' +
         (canPublish ? '<button class="small go" data-act="publish">Publish</button>' : '') +
+        ((p.channel_results || []).filter(r => r.link).map(r => '<a class="btn small" href="' + esc(r.link) + '" target="_blank" rel="noopener">View on ' + esc(r.service) + '</a>').join('')) +
         '<button class="small" data-act="more">Show more</button>' +
         '<button class="small" data-act="copy">Copy text</button>' +
         (p.status !== 'published' ? '<button class="small" data-act="edit">Edit text</button>' : '') +

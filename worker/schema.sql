@@ -61,3 +61,11 @@ CREATE TABLE IF NOT EXISTS runs (
   gh_run_url TEXT
 );
 CREATE INDEX IF NOT EXISTS runs_started_idx ON runs (started_at);
+
+-- Rendered news images live in D1 (instantly consistent) so Buffer can fetch them the moment
+-- a post is sent; KV can lag up to a minute at other Cloudflare locations.
+CREATE TABLE IF NOT EXISTS images (
+  id TEXT PRIMARY KEY,
+  data BLOB NOT NULL,
+  created_at TEXT
+);
