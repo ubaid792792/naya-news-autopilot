@@ -114,7 +114,7 @@ def setup_github(env: dict, worker_url: str | None) -> None:
     repo = f"{owner}/{REPO_NAME}"
     if gh("GET", f"/repos/{repo}", token).status_code == 404:
         r = gh("POST", "/user/repos", token, json={
-            "name": REPO_NAME, "private": False, "has_issues": False, "has_wiki": False,
+            "name": REPO_NAME, "private": True, "has_issues": False, "has_wiki": False,
             "description": "Free automated news-to-social posting pipeline (Naya News)"})
         r.raise_for_status()
         print(f"Created repository {repo}")
