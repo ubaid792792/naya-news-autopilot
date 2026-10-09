@@ -281,6 +281,83 @@ async function dailyCleanup(env, s) {
   await saveSettings(env, { last_cleanup_date: today });
 }
 
+// ---------- news sources ----------
+
+const SOURCE_UA = "Mozilla/5.0 (compatible; NayaNewsAutopilot/1.0; +https://github.com)";
+const BLOCKED_SOCIAL = {
+  "x.com": "X (Twitter)", "twitter.com": "X (Twitter)", "linkedin.com": "LinkedIn", "facebook.com": "Facebook",
+  "fb.com": "Facebook", "instagram.com": "Instagram", "threads.net": "Threads", "tiktok.com": "TikTok",
+};
+const googleNews = (q) => `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=en-PK&gl=PK&ceid=PK:en`;
+
+// Turn whatever the user pastes into a readable feed: RSS/Atom links as-is, websites and YouTube
+// channels via their advertised feed, Telegram and Bluesky via their free public feeds, plain words
+// as a Google News search. Platforms that block free reading get a clear explanation instead.
+async function resolveSource(raw) {
+  let input = raw.trim();
+  if (!input) throw new HttpError(400, "Paste a website, feed link, channel link or topic words");
+  if (!/^https?:\/\//i.test(input)) {
+    if (/^[\w-]+(\.[\w-]+)+(\/\S*)?$/.test(input)) input = `https://${input}`;
+    else return { url: googleNews(input), kind: "topic", name: `Google News: ${input}`.slice(0, 80) };
+  }
+  let u;
+  try {
+    u = new URL(input);
+  } catch {
+    throw new HttpError(400, "That link doesn't look valid");
+  }
+  const host = u.hostname.replace(/^(www|m|mobile)\./, "");
+  const blocked = Object.keys(BLOCKED_SOCIAL).find((h) => host === h || host.endsWith(`.${h}`));
+  if (blocked) {
+    throw new HttpError(400, `${BLOCKED_SOCIAL[blocked]} accounts can't be read for free (the platform blocks it). ` +
+      "Add the outlet's website instead (for example dawn.com) and the system finds its news feed automatically, " +
+      "or type the outlet's name as topic words to follow it through Google News.");
+  }
+  if (host === "t.me" || host === "telegram.me") {
+    const name = u.pathname.split("/").filter(Boolean).filter((p) => p !== "s")[0];
+    if (!name) throw new HttpError(400, "Use a public channel link like https://t.me/channelname");
+    return { url: `https://t.me/s/${name}`, kind: "telegram", name: `Telegram: ${name}` };
+  }
+  if (host === "bsky.app") {
+    const m = u.pathname.match(/^\/profile\/([^/]+)/);
+    if (m) return { url: `https://bsky.app/profile/${m[1]}/rss`, kind: "rss", name: `Bluesky: ${m[1]}` };
+  }
+  let res;
+  try {
+    res = await fetch(u.toString(), { headers: { "user-agent": SOURCE_UA, accept: "application/rss+xml, application/atom+xml, text/html;q=0.9, */*;q=0.5" }, redirect: "follow" });
+  } catch {
+    throw new HttpError(400, "Couldn't open that link. Check the address and try again.");
+  }
+  const type = res.headers.get("content-type") || "";
+  if (/xml|rss|atom/i.test(type)) {
+    const head = (await res.text()).slice(0, 4000);
+    if (/<(rss|feed|rdf:RDF)\b/i.test(head)) {
+      const title = (head.match(/<title[^>]*>(?:<!\[CDATA\[)?([^<\]]+)/i) || [])[1];
+      return { url: res.url, kind: "rss", name: (title || host).trim().slice(0, 80) };
+    }
+  }
+  if (/html/i.test(type)) {
+    let feedHref = null;
+    let title = "";
+    await new HTMLRewriter()
+      .on('link[rel="alternate"]', {
+        element(el) {
+          const t = (el.getAttribute("type") || "").toLowerCase();
+          if (!feedHref && (t.includes("rss") || t.includes("atom"))) feedHref = el.getAttribute("href");
+        },
+      })
+      .on("title", { text(t) { if (title.length < 200) title += t.text; } })
+      .transform(res)
+      .arrayBuffer();
+    if (feedHref) {
+      const kind = host.endsWith("youtube.com") ? "youtube" : "rss";
+      return { url: new URL(feedHref, res.url).toString(), kind, name: title.trim().slice(0, 80) || host };
+    }
+    return { url: googleNews(`site:${host}`), kind: "topic", name: `${host} (via Google News)` };
+  }
+  throw new HttpError(400, "Couldn't find news on that link. Paste the website address or its RSS link.");
+}
+
 // ---------- Buffer ----------
 
 async function buffer(env, query) {
@@ -496,7 +573,7 @@ async function pipelineRoute(request, env, path, method, origin) {
   if (path === "/pipeline/config" && method === "GET") {
     const s = await getSettings(env);
     const [feeds, seen, recent, today] = await Promise.all([
-      env.DB.prepare("SELECT id, url, name, category, enabled FROM feeds WHERE enabled = 1").all(),
+      env.DB.prepare("SELECT id, url, name, category, enabled, kind, interval_minutes, last_fetched_at FROM feeds WHERE enabled = 1").all(),
       env.DB.prepare("SELECT guid FROM seen").all(),
       env.DB.prepare("SELECT title_key FROM seen WHERE title_key IS NOT NULL ORDER BY seen_at DESC LIMIT 400").all(),
       publishedToday(env, s),
@@ -611,15 +688,15 @@ async function panelRoute(request, env, path, method, origin) {
   }
   if (path === "/api/feeds" && method === "POST") {
     const b = await body(request);
-    const url = String(b.url || "").trim();
-    if (!/^https?:\/\/\S+$/.test(url)) throw new HttpError(400, "Feed URL must start with http(s)://");
-    await env.DB.prepare("INSERT INTO feeds (url, name, category, enabled, created_at) VALUES (?, ?, ?, 1, ?)")
-      .bind(url, String(b.name || "").trim() || null, String(b.category || "").trim() || null, nowIso())
+    const src = await resolveSource(String(b.url || ""));
+    const interval = Math.max(0, Math.min(1440, Number(b.interval_minutes) || 0));
+    await env.DB.prepare("INSERT INTO feeds (url, name, category, enabled, kind, interval_minutes, created_at) VALUES (?, ?, ?, 1, ?, ?, ?)")
+      .bind(src.url, String(b.name || "").trim() || src.name || null, String(b.category || "").trim() || null, src.kind, interval, nowIso())
       .run()
       .catch(() => {
-        throw new HttpError(409, "That feed is already in the list");
+        throw new HttpError(409, "That source is already in the list");
       });
-    return json({ ok: true });
+    return json({ ok: true, ...src });
   }
   if ((m = path.match(/^\/api\/feeds\/(\d+)$/))) {
     if (method === "DELETE") {
@@ -632,6 +709,7 @@ async function panelRoute(request, env, path, method, origin) {
       if ("enabled" in b) fields.enabled = b.enabled ? 1 : 0;
       if ("name" in b) fields.name = String(b.name || "") || null;
       if ("category" in b) fields.category = String(b.category || "") || null;
+      if ("interval_minutes" in b) fields.interval_minutes = Math.max(0, Math.min(1440, Number(b.interval_minutes) || 0));
       const sets = Object.keys(fields).map((k) => `${k} = ?`);
       const vals = Object.values(fields);
       if (sets.length) await env.DB.prepare(`UPDATE feeds SET ${sets.join(", ")} WHERE id = ?`).bind(...vals, Number(m[1])).run();

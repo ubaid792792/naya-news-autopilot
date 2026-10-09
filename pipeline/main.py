@@ -17,7 +17,7 @@ from PIL import Image
 
 from . import prompts, references
 from .ai import TextAI, generate_image
-from .feeds import Item, fetch_article_text, fetch_feed, is_similar
+from .feeds import Item, fetch_article_text, fetch_feed, is_due, is_similar, resolve_google_news
 from .render import render_card
 from .worker_api import WorkerAPI
 
@@ -59,7 +59,7 @@ def gather_candidates(cfg: dict, worker: WorkerAPI) -> list[Item]:
     now = datetime.now(timezone.utc)
     items, statuses = [], []
     for feed in cfg.get("feeds", []):
-        if not feed.get("enabled", 1):
+        if not feed.get("enabled", 1) or not is_due(feed, now):
             continue
         got, err = fetch_feed(feed)
         statuses.append({"id": feed["id"], "error": err, "count": len(got)})
@@ -101,10 +101,18 @@ def select(ai: TextAI, cands: list[Item], count: int, s: dict) -> list[Item]:
         return pool
 
 
+class NotEnoughText(Exception):
+    pass
+
+
 def write_post(ai: TextAI, item: Item, s: dict, custom_refs: list[dict] | None = None) -> dict:
+    item.link = resolve_google_news(item.link)
     text = fetch_article_text(item.link)
     if len(text) < 300:
         text = (item.summary + "\n" + text).strip()
+    if len(text) < 250:
+        # A headline alone is not enough to write an accurate post; skip rather than guess.
+        raise NotEnoughText(f"only {len(text)} characters of article text")
     fixed = [t for t in s.get("fixed_hashtags", []) if t]
     system = prompts.WRITE_SYSTEM.format(
         brand=s["brand_name"], niche=s["niche"], language=s.get("language", "English"), tone=s["tone"],
