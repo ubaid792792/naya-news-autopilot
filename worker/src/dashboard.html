@@ -177,12 +177,13 @@
           <option value="180">3 hours</option><option value="240">4 hours</option><option value="360">6 hours</option>
           <option value="480">8 hours</option><option value="720">12 hours</option><option value="1440">24 hours</option></select></div>
         <div class="field"><label>Posts per run</label><input name="posts_per_run" type="number" min="1" max="5"></div>
-        <div class="field"><label>Max posts per day</label><input name="daily_cap" type="number" min="1" max="48"></div>
-        <div class="field"><label>Active from (hour)</label><select name="active_start_hour" data-hours></select></div>
+        <div class="field"><label>Max posts per day (Buffer allows 50)</label><input name="daily_cap" type="number" min="1" max="50"></div>
+        <div class="field"><label>Active from (hour) - same as "until" = all day</label><select name="active_start_hour" data-hours></select></div>
         <div class="field"><label>Active until (hour)</label><select name="active_end_hour" data-hours></select></div>
         <div class="field"><label>Time zone</label><select name="tz_offset_minutes">
           <option value="300">Pakistan (PKT, UTC+5)</option><option value="0">UTC</option><option value="240">Gulf (UTC+4)</option>
           <option value="180">Saudi Arabia (UTC+3)</option><option value="60">UK winter (UTC+1)</option><option value="330">India (UTC+5:30)</option></select></div>
+        <div class="field"><label>Posting day starts at (for the daily limit)</label><select name="day_start_hour" data-hours></select></div>
         <div class="field"><label>Only use news newer than (hours)</label><input name="max_article_age_hours" type="number" min="1" max="168"></div>
       </div>
       <h3 style="margin-top:18px">Queue</h3>

@@ -11,6 +11,7 @@ const DEFAULTS = {
   daily_cap: 8,
   active_start_hour: 8,
   active_end_hour: 23,
+  day_start_hour: 0,
   tz_offset_minutes: 300,
   approval_mode: false,
   max_article_age_hours: 24,
@@ -177,8 +178,9 @@ function cleanSettingsPatch(patch) {
   }
   if ("interval_minutes" in out && out.interval_minutes < 15) throw new HttpError(400, "interval must be at least 15 minutes");
   if ("posts_per_run" in out) out.posts_per_run = Math.max(1, Math.min(5, Math.round(out.posts_per_run)));
-  if ("daily_cap" in out) out.daily_cap = Math.max(1, Math.min(48, Math.round(out.daily_cap)));
-  for (const k of ["active_start_hour", "active_end_hour"]) if (k in out) out[k] = Math.max(0, Math.min(24, Math.round(out[k])));
+  // Buffer accepts at most 50 posts per channel per day.
+  if ("daily_cap" in out) out.daily_cap = Math.max(1, Math.min(50, Math.round(out.daily_cap)));
+  for (const k of ["active_start_hour", "active_end_hour", "day_start_hour"]) if (k in out) out[k] = Math.max(0, Math.min(24, Math.round(out[k])));
   if ("accent_color" in out && !/^#[0-9a-fA-F]{6}$/.test(out.accent_color)) throw new HttpError(400, "accent colour must look like #FFC72C");
   if ("source_credit" in out && !["none", "name", "link"].includes(out.source_credit)) throw new HttpError(400, "bad source_credit");
   if ("queue_order" in out && !["freshest", "top"].includes(out.queue_order)) throw new HttpError(400, "bad queue_order");
@@ -203,17 +205,32 @@ function inActiveHours(s, ms = Date.now()) {
   return a < b ? h >= a && h < b : h >= a || h < b;
 }
 
+// Start of the current posting day (local time), which begins at day_start_hour, e.g. 08:00.
 function localDayStartIso(s, ms = Date.now()) {
-  const d = localDate(s, ms);
-  const start = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - s.tz_offset_minutes * 60000;
+  const shift = (Number(s.day_start_hour) || 0) * 3600000;
+  const d = localDate(s, ms - shift);
+  const start = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - s.tz_offset_minutes * 60000 + shift;
   return new Date(start).toISOString();
 }
 
-async function publishedToday(env, s) {
+const BUFFER_DAILY_LIMIT = 50;
+
+async function publishedSince(env, iso) {
   const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM posts WHERE status IN ('published','partial') AND published_at >= ?")
-    .bind(localDayStartIso(s))
+    .bind(iso)
     .first();
   return row?.n || 0;
+}
+
+const publishedToday = (env, s) => publishedSince(env, localDayStartIso(s));
+
+// Posts still allowed now: the user's daily cap for the posting day, and Buffer's own 50-per-calendar-day limit.
+async function remainingToday(env, s) {
+  const [day, calendar] = await Promise.all([
+    publishedToday(env, s),
+    publishedSince(env, localDayStartIso({ ...s, day_start_hour: 0 })),
+  ]);
+  return Math.max(0, Math.min(s.daily_cap - day, BUFFER_DAILY_LIMIT - calendar));
 }
 
 function nextRunEstimate(s) {
@@ -261,12 +278,14 @@ async function tick(env) {
     .bind(nowIso(), stale)
     .run();
   await dailyCleanup(env, s);
-  await syncSendingPosts(env).catch((err) => console.error("status sync failed", err.message));
+  // Final-status checks cost one Buffer API call per post; skip them at high volume so a month of
+  // posting fits Buffer's free 3,000 calls per 30 days.
+  if (s.daily_cap <= 40) await syncSendingPosts(env).catch((err) => console.error("status sync failed", err.message));
 
   if (!s.enabled || !inActiveHours(s)) return;
   const last = s.last_dispatch_at ? Date.parse(s.last_dispatch_at) : 0;
   if (Date.now() - last < s.interval_minutes * 60000 - 90000) return;
-  if ((await publishedToday(env, s)) >= s.daily_cap) return;
+  if ((await remainingToday(env, s)) <= 0) return;
   const busy = await env.DB.prepare("SELECT COUNT(*) AS n FROM runs WHERE status IN ('dispatched','running')").first();
   if (busy?.n) return;
   await saveSettings(env, { last_dispatch_at: nowIso() });
@@ -635,7 +654,7 @@ async function pipelineRoute(request, env, path, method, origin) {
       feeds: feeds.results,
       seen: seen.results.map((r) => r.guid),
       recent_title_keys: recent.results.map((r) => r.title_key),
-      remaining_today: Math.max(0, s.daily_cap - today),
+      remaining_today: await remainingToday(env, s),
       assets: { logo: s.asset_logo, frame: s.asset_frame },
       custom_refs: s.custom_refs || [],
     });
