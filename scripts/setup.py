@@ -85,6 +85,11 @@ def setup_worker(env: dict) -> str:
     for name in ("DASHBOARD_PASSWORD", "PIPELINE_SECRET", "BUFFER_API_KEY", "GH_TOKEN", "QUEUE_URL"):
         if env.get(name):
             wrangler("secret", "put", name, stdin=env[name])
+    if env.get("QUEUE_SHEET_LINK"):
+        value = json.dumps(env["QUEUE_SHEET_LINK"]).replace("'", "''")
+        wrangler("d1", "execute", "naya-news-db", "--remote", "--yes", "--command",
+                 f"INSERT INTO settings (key, value) VALUES ('queue_sheet_link', '{value}') "
+                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value")
     print(f"Worker deployed and secrets set: {url}")
     return url
 

@@ -50,8 +50,22 @@ function handle_(req) {
   }
 }
 
+// Works both when the script is attached to the sheet (Extensions > Apps Script) and when it is a
+// separate project: then setup() creates the spreadsheet and its id is remembered in the script.
+function ss_() {
+  var active = SpreadsheetApp.getActiveSpreadsheet();
+  if (active) return active;
+  var props = PropertiesService.getScriptProperties();
+  var id = props.getProperty('SHEET_ID');
+  if (id) return SpreadsheetApp.openById(id);
+  var created = SpreadsheetApp.create('Naya News Queue');
+  created.setSpreadsheetTimeZone('Asia/Karachi');
+  props.setProperty('SHEET_ID', created.getId());
+  return created;
+}
+
 function sheet_(name, head) {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ss = ss_();
   var sh = ss.getSheetByName(name);
   if (!sh && name === QUEUE && ss.getSheets()[0].getLastRow() === 0) {
     sh = ss.getSheets()[0].setName(QUEUE);  // reuse the empty default tab
@@ -159,10 +173,11 @@ function out_(obj) {
 
 // Run once from the editor (Run > setup) to create the tabs and set the time zone.
 function setup() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ss = ss_();
   ss.setSpreadsheetTimeZone('Asia/Karachi');
   sheet_(QUEUE, Q_HEAD);
   sheet_(POSTED, P_HEAD);
   var first = ss.getSheetByName('Sheet1');
   if (first && ss.getSheets().length > 2 && first.getLastRow() === 0) ss.deleteSheet(first);
+  Logger.log('Queue sheet ready: ' + ss.getUrl());
 }
