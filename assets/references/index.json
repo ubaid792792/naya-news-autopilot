@@ -1,0 +1,206 @@
+{
+ "parliament_house": {
+  "kind": "building",
+  "name": "Parliament House, Islamabad",
+  "file": "parliament_house.jpg",
+  "desc": "long white marble modernist building with a flat roof and a wide facade of tall slender columns, broad steps, lawns and fountains"
+ },
+ "supreme_court": {
+  "kind": "building",
+  "name": "Supreme Court of Pakistan, Islamabad",
+  "file": "supreme_court.jpg",
+  "desc": "monumental white marble building with a tall recessed central entrance framed by stepped terraced arches and symmetrical wings"
+ },
+ "faisal_mosque": {
+  "kind": "building",
+  "name": "Faisal Mosque, Islamabad",
+  "file": "faisal_mosque.jpg",
+  "desc": "white tent-shaped concrete prayer hall with four tall slim pencil minarets at the foot of the Margalla Hills"
+ },
+ "pakistan_monument": {
+  "kind": "building",
+  "name": "Pakistan Monument, Islamabad",
+  "file": "pakistan_monument.jpg",
+  "desc": "four large granite petal-shaped walls opening like a flower on a hill"
+ },
+ "minar_e_pakistan": {
+  "kind": "building",
+  "name": "Minar-e-Pakistan, Lahore",
+  "file": "minar_e_pakistan.jpg",
+  "desc": "tall white tapering tower with a flared lotus-like base on a raised platform in a green park"
+ },
+ "badshahi_mosque": {
+  "kind": "building",
+  "name": "Badshahi Mosque, Lahore",
+  "file": "badshahi_mosque.jpg",
+  "desc": "red sandstone mosque with three white marble domes and four tall minarets"
+ },
+ "mazar_e_quaid": {
+  "kind": "building",
+  "name": "Mazar-e-Quaid, Karachi",
+  "file": "mazar_e_quaid.jpg",
+  "desc": "white marble cube-shaped mausoleum with a large white dome and tall Moorish arches"
+ },
+ "state_bank": {
+  "kind": "building",
+  "name": "State Bank of Pakistan building, Karachi",
+  "file": "state_bank.jpg",
+  "desc": "tall rectangular high-rise with a reddish-brown grid facade on I.I. Chundrigar Road"
+ },
+ "aiwan_e_sadr": {
+  "kind": "building",
+  "name": "Aiwan-e-Sadr (President House), Islamabad",
+  "file": "aiwan_e_sadr.jpg",
+  "desc": "large white palace-like complex with Mughal-style arches and formal gardens"
+ },
+ "pm_office": {
+  "kind": "building",
+  "name": "Prime Minister's Office, Islamabad",
+  "file": "pm_office.jpg",
+  "desc": "long cream-coloured building with Mughal-style arches and domed corner pavilions"
+ },
+ "lahore_high_court": {
+  "kind": "building",
+  "name": "Lahore High Court",
+  "file": "lahore_high_court.jpg",
+  "desc": "red brick Mughal-Gothic building with domed towers"
+ },
+ "punjab_assembly": {
+  "kind": "building",
+  "name": "Punjab Assembly, Lahore",
+  "file": "punjab_assembly.jpg",
+  "desc": "cream colonial building with a white domed pavilion in front and the Summit Minar nearby"
+ },
+ "election_commission": {
+  "kind": "building",
+  "name": "Election Commission of Pakistan, Islamabad",
+  "file": "election_commission.jpg",
+  "desc": "cream two-storey government building with a green entrance canopy"
+ },
+ "karachi_port": {
+  "kind": "building",
+  "name": "Karachi Port",
+  "file": "karachi_port.jpg",
+  "desc": "harbour with tall gantry cranes, container ships and stacked containers"
+ },
+ "tarbela_dam": {
+  "kind": "building",
+  "name": "Tarbela Dam",
+  "file": "tarbela_dam.jpg",
+  "desc": "huge earth-fill dam with concrete spillways releasing white water"
+ },
+ "mangla_dam": {
+  "kind": "building",
+  "name": "Mangla Dam",
+  "file": "mangla_dam.jpg",
+  "desc": "large dam with a wide reservoir and concrete spillway"
+ },
+ "frere_hall": {
+  "kind": "building",
+  "name": "Frere Hall, Karachi",
+  "file": "frere_hall.jpg",
+  "desc": "yellow sandstone Venetian-Gothic hall with a tall spire and arched windows"
+ },
+ "jinnah_airport": {
+  "kind": "building",
+  "name": "Jinnah International Airport, Karachi",
+  "file": "jinnah_airport.jpg",
+  "desc": "modern terminal with a long curved roof and glass facade"
+ },
+ "islamabad_airport": {
+  "kind": "building",
+  "name": "Islamabad International Airport",
+  "file": "islamabad_airport.jpg",
+  "desc": "modern terminal with a large white canopy roof and glass walls"
+ },
+ "lahore_fort": {
+  "kind": "building",
+  "name": "Lahore Fort",
+  "file": "lahore_fort.jpg",
+  "desc": "Mughal fortress with red sandstone walls, white marble pavilions and the Alamgiri Gate"
+ },
+ "UN": {
+  "kind": "flag",
+  "name": "the United Nations",
+  "file": "un.png",
+  "desc": "light blue flag with the white United Nations emblem (world map inside olive branches)"
+ },
+ "NATO": {
+  "kind": "flag",
+  "name": "NATO",
+  "file": "nato.png",
+  "desc": "dark blue flag with a white four-pointed compass rose and four white lines"
+ },
+ "ARAB_LEAGUE": {
+  "kind": "flag",
+  "name": "the Arab League",
+  "file": "arab_league.png",
+  "desc": "green flag with a white emblem of a crescent inside a golden wreath"
+ },
+ "GCC": {
+  "kind": "flag",
+  "name": "the Gulf Cooperation Council",
+  "file": "gcc.png",
+  "desc": "green-and-white flag with the round GCC emblem"
+ },
+ "ASEAN": {
+  "kind": "flag",
+  "name": "ASEAN",
+  "file": "asean.png",
+  "desc": "blue flag with a red circle holding yellow rice stalks"
+ },
+ "AU": {
+  "kind": "flag",
+  "name": "the African Union",
+  "file": "au.png",
+  "desc": "green flag with a white map of Africa inside a ring of gold stars"
+ },
+ "IMF": {
+  "kind": "flag",
+  "name": "the International Monetary Fund (IMF seal)",
+  "file": "imf.png",
+  "desc": "the round blue IMF seal with a globe and the words International Monetary Fund around it"
+ },
+ "WORLD_BANK": {
+  "kind": "flag",
+  "name": "the World Bank (logo)",
+  "file": "world_bank.png",
+  "desc": "the World Bank globe logo in blue"
+ },
+ "PTI": {
+  "kind": "flag",
+  "name": "Pakistan Tehreek-e-Insaf (PTI)",
+  "file": "pti.png",
+  "desc": "party flag split horizontally green over red with a large white crescent and a white star"
+ },
+ "PMLN": {
+  "kind": "flag",
+  "name": "Pakistan Muslim League-N (PML-N)",
+  "file": "pmln.png",
+  "desc": "dark green party flag with a white tiger and a white crescent and star"
+ },
+ "PPP": {
+  "kind": "flag",
+  "name": "Pakistan Peoples Party (PPP)",
+  "file": "ppp.png",
+  "desc": "party flag with vertical red, black and green stripes and a white crescent and star on the black stripe"
+ },
+ "MQM": {
+  "kind": "flag",
+  "name": "Muttahida Qaumi Movement (MQM)",
+  "file": "mqm.png",
+  "desc": "party flag with red, white and green stripes"
+ },
+ "JI": {
+  "kind": "flag",
+  "name": "Jamaat-e-Islami Pakistan",
+  "file": "ji.png",
+  "desc": "party flag of sky blue and green with a white crescent and star"
+ },
+ "JUIF": {
+  "kind": "flag",
+  "name": "Jamiat Ulema-e-Islam (F)",
+  "file": "juif.png",
+  "desc": "party flag of black and white horizontal stripes"
+ }
+}

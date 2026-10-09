@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 from PIL import Image
 
-from . import prompts
+from . import prompts, references
 from .ai import TextAI, generate_image
 from .feeds import Item, fetch_article_text, fetch_feed, is_similar
 from .render import render_card
@@ -101,7 +101,7 @@ def select(ai: TextAI, cands: list[Item], count: int, s: dict) -> list[Item]:
         return pool
 
 
-def write_post(ai: TextAI, item: Item, s: dict) -> dict:
+def write_post(ai: TextAI, item: Item, s: dict, custom_refs: list[dict] | None = None) -> dict:
     text = fetch_article_text(item.link)
     if len(text) < 300:
         text = (item.summary + "\n" + text).strip()
@@ -110,6 +110,7 @@ def write_post(ai: TextAI, item: Item, s: dict) -> dict:
         brand=s["brand_name"], niche=s["niche"], language=s.get("language", "English"), tone=s["tone"],
         hashtag_count=s.get("hashtag_count", 9), image_style=s.get("image_style", ""),
         people_rule=prompts.PEOPLE_RULES.get(s.get("people_in_images", "none"), prompts.PEOPLE_RULES["none"]),
+        reference_catalogue=references.catalogue(custom_refs),
         fixed_tags=(" Always include: " + " ".join(fixed) + ".") if fixed else "")
     user = prompts.WRITE_USER.format(
         source=item.source, title=item.title, link=item.link,
@@ -179,7 +180,7 @@ def main() -> int:
             attempts += 1
             log.info("writing: %s (%s)", item.title, item.link)
             try:
-                data = write_post(ai, item, s)
+                data = write_post(ai, item, s, cfg.get("custom_refs", []))
             except Exception as exc:  # noqa: BLE001
                 log.error("write failed: %s", exc)
                 if "all text models failed" in str(exc):
@@ -189,8 +190,10 @@ def main() -> int:
             prompt = data["image_prompt"].strip() + " " + prompts.image_suffix(s.get("people_in_images", "none"))
             log.info("scene: %s", data.get("scene"))
             scene = data.get("scene") or {}
-            flag_codes = [str(c) for c in (scene.get("flags") or []) if c][:2]
-            bg, image_model = generate_image(worker, prompt, s.get("image_model"), flag_codes)
+            flag_keys = [str(c) for c in (scene.get("flags") or []) if c][:3]
+            building_key = str(scene.get("landmark_key") or "").strip() or None
+            bg, image_model = generate_image(worker, prompt, s.get("image_model"), flag_keys, building_key,
+                                             cfg.get("custom_refs", []))
             if image_model == "pollinations":  # trim the corner watermark
                 im = Image.open(io.BytesIO(bg))
                 buf = io.BytesIO()

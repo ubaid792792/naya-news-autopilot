@@ -40,8 +40,9 @@ const DEFAULTS = {
   last_cleanup_date: null,
   asset_logo: false,
   asset_frame: false,
+  custom_refs: [],
 };
-const INTERNAL_KEYS = new Set(["buffer_channels", "last_dispatch_at", "last_cleanup_date", "asset_logo", "asset_frame"]);
+const INTERNAL_KEYS = new Set(["buffer_channels", "last_dispatch_at", "last_cleanup_date", "asset_logo", "asset_frame", "custom_refs"]);
 const TEXT_FALLBACK_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 const SESSION_COOKIE = "nn_session";
 const SESSION_DAYS = 30;
@@ -450,6 +451,12 @@ async function route(request, env) {
     if (!data) return new Response("not found", { status: 404 });
     return new Response(data, { headers: { "content-type": "image/jpeg", "cache-control": "public, max-age=86400" } });
   }
+  m = path.match(/^\/asset\/ref\/([A-Za-z0-9_]{2,40})$/);
+  if (m && method === "GET") {
+    const obj = await env.IMAGES.getWithMetadata(`ref:${m[1]}`, { type: "arrayBuffer" });
+    if (!obj.value) return new Response("not found", { status: 404 });
+    return new Response(obj.value, { headers: { "content-type": obj.metadata?.type || "image/png", "cache-control": "no-cache" } });
+  }
   m = path.match(/^\/asset\/(logo|frame)\.png$/);
   if (m && method === "GET") {
     const data = await env.IMAGES.get(`asset:${m[1]}`, { type: "arrayBuffer" });
@@ -501,6 +508,7 @@ async function pipelineRoute(request, env, path, method, origin) {
       recent_title_keys: recent.results.map((r) => r.title_key),
       remaining_today: Math.max(0, s.daily_cap - today),
       assets: { logo: s.asset_logo, frame: s.asset_frame },
+      custom_refs: s.custom_refs || [],
     });
   }
   if (path === "/pipeline/runs" && method === "POST") {
@@ -648,6 +656,30 @@ async function panelRoute(request, env, path, method, origin) {
     if (method === "DELETE") {
       await env.IMAGES.delete(`img:${row.id}`);
       await env.DB.prepare("DELETE FROM posts WHERE id = ?").bind(row.id).run();
+      return json({ ok: true });
+    }
+  }
+  if ((m = path.match(/^\/api\/refs\/([A-Za-z0-9_]{2,40})$/))) {
+    const key = m[1].toUpperCase();
+    const s = await getSettings(env);
+    const list = (s.custom_refs || []).filter((r) => r.key !== key);
+    if (method === "PUT") {
+      const type = request.headers.get("content-type") || "";
+      if (!/^image\/(png|jpeg)$/.test(type)) throw new HttpError(400, "Upload a PNG or JPG picture");
+      const data = await request.arrayBuffer();
+      if (data.byteLength > 4_000_000) throw new HttpError(400, "Picture must be under 4 MB");
+      const url = new URL(request.url);
+      const kind = ["flag", "emblem", "building"].includes(url.searchParams.get("kind")) ? url.searchParams.get("kind") : "flag";
+      const name = (url.searchParams.get("name") || key).slice(0, 80);
+      const desc = (url.searchParams.get("desc") || "").slice(0, 300);
+      await env.IMAGES.put(`ref:${key}`, data, { metadata: { type } });
+      list.push({ key, name, kind, desc });
+      await saveSettings(env, { custom_refs: list });
+      return json({ ok: true, key });
+    }
+    if (method === "DELETE") {
+      await env.IMAGES.delete(`ref:${key}`);
+      await saveSettings(env, { custom_refs: list });
       return json({ ok: true });
     }
   }

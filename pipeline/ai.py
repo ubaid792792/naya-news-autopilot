@@ -13,7 +13,7 @@ import urllib.parse
 
 import requests
 
-from . import flags
+from . import references
 from .worker_api import WorkerAPI
 
 log = logging.getLogger("ai")
@@ -90,28 +90,34 @@ class TextAI:
 
 
 def generate_image(worker: WorkerAPI, prompt: str, preferred: str | None = None,
-                   flag_codes: list[str] | None = None) -> tuple[bytes, str]:
-    """Try each free image model. FLUX.2 models also get the real flag images as references."""
+                   flag_keys: list[str] | None = None, building_key: str | None = None,
+                   custom_refs: list[dict] | None = None) -> tuple[bytes, str]:
+    """Try each free image model. FLUX.2 models also get real reference pictures (flags, emblems,
+    official buildings) so those details come out accurate."""
     models = [preferred] + [m for m in IMAGE_MODELS if m != preferred] if preferred else IMAGE_MODELS
-    refs: list[str] = []
+    flag_keys = flag_keys or []
+    ref_text, refs = (references.resolve(flag_keys, building_key, custom_refs, worker.base)
+                      if (flag_keys or building_key) else ("", []))
+    plain_text = references.describe_only(flag_keys, building_key, custom_refs)
     errors = []
     for model in models:
-        use_refs = "flux-2" in model and bool(flag_codes)
-        flag_text, used = flags.flag_prompt(flag_codes or [], with_reference=use_refs)
-        if use_refs and not refs:
-            refs = flags.flag_images(used)
-        if use_refs and len(refs) != len(used):
-            flag_text, used = flags.flag_prompt(flag_codes or [], with_reference=False)
-        full = f"{prompt} {flag_text}".strip()
+        use_refs = "flux-2" in model and bool(refs)
+        full = f"{prompt} {ref_text if use_refs else plain_text}".strip()
         try:
-            image = worker.generate_image(full, 1024, 1232, model, refs if use_refs and refs else None)
-            return image, model + (" +flag refs" if use_refs and refs else "")
+            image = worker.generate_image(full, 1024, 1232, model, refs if use_refs else None)
+            return image, model + (f" +{len(refs)} refs" if use_refs else "")
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{model}: {exc}")
             log.warning("image model failed: %s", exc)
+            if use_refs and "flagged" in str(exc).lower():
+                # The safety filter sometimes rejects a reference combination; retry with text only.
+                try:
+                    image = worker.generate_image(f"{prompt} {plain_text}".strip(), 1024, 1232, model, None)
+                    return image, model + " (text-only retry)"
+                except Exception as exc2:  # noqa: BLE001
+                    errors.append(f"{model} text-only: {exc2}")
     try:
-        flag_text, _ = flags.flag_prompt(flag_codes or [], with_reference=False)
-        full = f"{prompt} {flag_text}".strip()
+        full = f"{prompt} {plain_text}".strip()
         url = ("https://image.pollinations.ai/prompt/" + urllib.parse.quote(full[:1200])
                + "?width=1024&height=1232&nologo=true&model=flux&seed=" + str(int(time.time()) % 100000))
         r = requests.get(url, timeout=180)

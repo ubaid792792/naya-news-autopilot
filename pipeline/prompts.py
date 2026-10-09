@@ -90,7 +90,7 @@ Scene rules:
    that country's real look.
 {people_rule}
 6. NO TEXT. No readable words, letters, numbers, signs, logos, brand marks or watermarks
-   anywhere in the image. Screens and papers are blurred or unreadable. Sacks, boxes, bottles,
+   anywhere in the image, except the real flags and emblems supplied as reference pictures. Screens and papers are blurred or unreadable. Sacks, boxes, bottles,
    packaging, vehicles and shop fronts are plain and unbranded.
 7. COMPOSITION FOR THE CARD. Vertical 4:5 frame. Main subject fills the upper and middle part.
    The bottom third is simple and uncluttered (road, floor, table top, ground, water) because the
@@ -101,31 +101,24 @@ Scene rules:
    professional magazine-cover look. Avoid dark, dim, gloomy, foggy, hazy, smoky, grey or night
    scenes. Use night only when the story itself happens at night, and then make it brightly lit
    with vivid colourful lights. Style: {image_style}.
-9. FLAGS. Show a national flag only when it belongs to the story (government, diplomacy, defence,
-   trade between countries, national events): at most two, large and clearly visible, flying on a
-   flagpole against the sky or standing on a desk stand. Put the ISO country code of every flag in
-   scene.flags (e.g. ["PK"] or ["PK", "CN"]); the system adds the exact flag design itself. Never
-   show flags of organisations (IMF, UN, World Bank, political parties).
-10. OFFICIAL BUILDINGS AND LANDMARKS. When the story names an institution or place with a famous
-   building, show that real building in bright daylight and describe its true look (shape,
-   materials, colours, surroundings) and put its name in scene.landmark. Known looks:
-   - Parliament House, Islamabad: long white marble modernist building with a flat roof and a wide
-     facade of tall slender columns, broad steps, green lawns and fountains, Margalla Hills behind.
-   - Supreme Court of Pakistan, Islamabad: monumental white marble building with a tall central
-     recessed entrance framed by stepped, terraced arches, symmetrical wings, wide stairs and palms.
-   - Faisal Mosque, Islamabad: white tent-shaped concrete prayer hall with four tall slim pencil
-     minarets, at the foot of the green Margalla Hills.
-   - Pakistan Monument, Islamabad: four large granite petal-shaped walls opening like a flower on a hill.
-   - Minar-e-Pakistan, Lahore: tall white tapering tower with a flared lotus-like base on a raised
-     platform in a green park.
-   - Badshahi Mosque, Lahore: red sandstone mosque with three white marble domes and four tall minarets.
-   - Mazar-e-Quaid, Karachi: white marble cube-shaped mausoleum with a large white dome and tall
-     Moorish arches, on a raised platform in a wide garden.
-   - Karachi Port: blue water, large container ships, rows of colourful shipping containers and
-     tall gantry cranes.
-   If you are not sure how a named building looks, do not invent details: show a bright, accurate
-   view of the city instead (Islamabad's green avenues with the Margalla Hills, Karachi's busy
-   seafront avenues, Lahore's Mughal-era red brick and white marble) with the right flag.
+9. FLAGS AND EMBLEMS. Show flags when they belong to the story: national flags for government,
+   diplomacy, defence, trade and national events; organisation flags or emblems (UN, IMF, World
+   Bank, NATO, GCC, Arab League...) when the story is about that organisation; party flags (PTI,
+   PML-N, PPP...) for party politics. At most 3, large and clearly visible: flying on flagpoles
+   against the sky, on a desk stand, on a podium front, or on vehicles and poles along a road.
+   Put their keys in scene.flags. The system gives the image model the real design as a reference
+   picture, so do not describe the flag's design yourself; just say where it is in the scene.
+10. OFFICIAL BUILDINGS AND LANDMARKS. When the story is about an institution or place that has a
+   building key in the library below, set scene.landmark_key to that key and make the building
+   the hero of the picture, seen from the front in bright daylight. The system gives the image
+   model a real photo of it, so describe the angle, light and surroundings, not the architecture.
+   With a building key, leave scene.flags empty and do not mention flags in image_prompt.
+   For institutions without a key, show a bright, accurate view of the right city (Islamabad's
+   green avenues and Margalla Hills, Karachi's busy seafront avenues, Lahore's Mughal-era red brick
+   and white marble) and do not invent a specific building.
+
+Reference library (use these keys exactly):
+{reference_catalogue}
 
 Examples of the planning (follow the method, do not copy them):
 - "Millers raise flour prices by Rs14 per kg in Karachi" -> eye-level shot inside a bright, clean
@@ -137,11 +130,16 @@ Examples of the planning (follow the method, do not copy them):
 - "Pakistan, IMF reach staff-level agreement for $1.2bn" -> bright modern conference room in
   Islamabad on a sunny morning: polished wooden table with two closed leather folders, a fountain pen
   and neat bundles of US dollar notes, a Pakistani flag on a desk stand, large windows showing the
-  green Margalla Hills under a blue sky; flags ["PK"].
+  green Margalla Hills under a blue sky; flags ["PK", "IMF"].
+- "Supreme Court rules on public employment" -> front view of the Supreme Court building in
+  Islamabad on a bright sunny day, palm trees, clipped lawns and flower beds, deep blue sky;
+  landmark_key "supreme_court", flags [].
+- "PTI convoy enters Peshawar" -> wide view of a Peshawar highway lined with PTI flags on poles and
+  parked vehicles decorated with PTI flags, bright afternoon sun; flags ["PTI"].
 
 Return JSON with exactly these keys, in this order:
 {{"headline": str, "highlights": [str], "paragraphs": [str], "hashtags": [str], "category": str,
-  "scene": {{"story_type": str, "main_subject": str, "location": str, "landmark": str,
+  "scene": {{"story_type": str, "main_subject": str, "location": str, "landmark_key": str,
              "story_details": [str], "flags": [str], "time_light_weather": str, "camera": str}},
   "image_prompt": str, "alt_text": str}}"""
 
@@ -157,7 +155,8 @@ Article text:
 def image_suffix(people: str) -> str:
     """Appended to every image prompt so the hard rules survive even a weak model's output."""
     base = ("Bright, vibrant, colourful photorealistic editorial photograph, well lit, vivid natural colours, "
-            "crisp sharp detail, plain unbranded objects, no readable text, no logos, no watermark.")
+            "crisp sharp detail, plain unbranded objects, no readable text, no logos other than the supplied "
+            "flags and emblems, no watermark.")
     if people == "anonymous":
         return base + " No identifiable or famous people, no close-up faces."
     return base + " No people, no human figures."

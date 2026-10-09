@@ -226,6 +226,21 @@
         <div><div class="asset-prev" id="framePrev">No frame uploaded</div><div class="row"><input type="file" accept="image/png" id="frameFile" style="flex:1"><button class="small" id="frameDel">Remove</button></div></div>
       </div>
     </div>
+    <div class="card">
+      <h3>Reference library (flags, emblems, buildings)</h3>
+      <p class="help">The image AI gets a real picture of every flag, emblem or official building in a story, so they come out accurate.
+        Built in: all country flags; United Nations, NATO, Arab League, Gulf Cooperation Council, ASEAN, African Union, International Monetary Fund (IMF seal), World Bank (logo), Pakistan Tehreek-e-Insaf (PTI), Pakistan Muslim League-N (PML-N), Pakistan Peoples Party (PPP), Muttahida Qaumi Movement (MQM), Jamaat-e-Islami Pakistan, Jamiat Ulema-e-Islam (F); buildings: Parliament House, Islamabad, Supreme Court of Pakistan, Islamabad, Faisal Mosque, Islamabad, Pakistan Monument, Islamabad, Minar-e-Pakistan, Lahore, Badshahi Mosque, Lahore, Mazar-e-Quaid, Karachi, State Bank of Pakistan building, Karachi, Aiwan-e-Sadr (President House), Islamabad, Prime Minister's Office, Islamabad, Lahore High Court, Punjab Assembly, Lahore, Election Commission of Pakistan, Islamabad, Karachi Port, Tarbela Dam, Mangla Dam, Frere Hall, Karachi, Jinnah International Airport, Karachi, Islamabad International Airport, Lahore Fort.
+        Add your own below (e.g. a party flag, a ministry building). Use a clear picture; it is resized automatically.</p>
+      <div class="grid3">
+        <div class="field"><label>Key (short, no spaces)</label><input id="refKey" placeholder="FBR_HQ"></div>
+        <div class="field"><label>Name</label><input id="refName" placeholder="Federal Board of Revenue headquarters, Islamabad"></div>
+        <div class="field"><label>Type</label><select id="refKind"><option value="flag">Flag</option><option value="emblem">Emblem / logo</option><option value="building">Building</option></select></div>
+        <div class="field" style="grid-column:1/-1"><label>Short visual description (optional)</label><input id="refDesc" placeholder="white six-storey building with blue glass windows"></div>
+        <div class="field" style="grid-column:1/-1"><label>Picture (PNG or JPG)</label><input type="file" id="refFile" accept="image/png,image/jpeg"></div>
+      </div>
+      <div class="row" style="margin-top:12px"><button id="refAdd" class="primary">Add to library</button></div>
+      <div id="refList" style="margin-top:10px"></div>
+    </div>
   </section>
 
   <section class="panel" id="p-channels">
@@ -307,7 +322,7 @@ function render() {
   if (!state.config.github) notes.push('<b>GitHub not linked.</b> Runs cannot start until GH_TOKEN is set on the Worker.');
   $('#notices').innerHTML = notes.map(n => '<div class="notice">' + n + '</div>').join('');
 
-  renderPosts(); renderFeeds(); renderRuns(); renderChannels(); fillForms(); renderAssets();
+  renderPosts(); renderFeeds(); renderRuns(); renderChannels(); fillForms(); renderAssets(); renderRefs();
 }
 
 function renderPosts() {
@@ -378,6 +393,13 @@ function fillForms() {
     else el.value = Array.isArray(v) ? v.join(', ') : (v ?? '');
   });
   $$('[data-icon]').forEach(el => el.checked = (s.footer_icons || []).includes(el.dataset.icon));
+}
+
+function renderRefs() {
+  const list = state.settings.custom_refs || [];
+  $('#refList').innerHTML = list.length ? list.map(r => '<div class="chan" data-key="' + esc(r.key) + '"><img src="/asset/ref/' + esc(r.key) + '" alt="" style="border-radius:8px">' +
+    '<div class="n"><b>' + esc(r.key) + '</b> - ' + esc(r.name) + '<small>' + esc(r.kind) + (r.desc ? ' - ' + esc(r.desc) : '') + '</small></div>' +
+    '<button class="small" data-act="refDel">Remove</button></div>').join('') : '<div class="empty" style="padding:12px">No custom references yet.</div>';
 }
 
 function renderAssets() {
@@ -467,6 +489,23 @@ for (const name of ['logo', 'frame']) {
   });
   $('#' + name + 'Del').onclick = async () => { try { await api('/api/assets/' + name, { method: 'DELETE' }); toast('Removed'); load(); } catch (err) { toast(err.message); } };
 }
+
+$('#refAdd').onclick = async () => {
+  const key = $('#refKey').value.trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+  const file = $('#refFile').files[0];
+  if (key.length < 2) return toast('Enter a short key, e.g. FBR_HQ');
+  if (!file) return toast('Choose a PNG or JPG picture');
+  const q = new URLSearchParams({ name: $('#refName').value.trim() || key, kind: $('#refKind').value, desc: $('#refDesc').value.trim() });
+  try { await api('/api/refs/' + key + '?' + q, { method: 'PUT', body: file, headers: { 'content-type': file.type } });
+    ['#refKey', '#refName', '#refDesc'].forEach(s => $(s).value = ''); $('#refFile').value = ''; toast('Added ' + key); load(); }
+  catch (e) { toast(e.message); }
+};
+$('#refList').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-act="refDel"]'); if (!b) return;
+  const key = b.closest('[data-key]').dataset.key;
+  if (!confirm('Remove ' + key + ' from the library?')) return;
+  try { await api('/api/refs/' + key, { method: 'DELETE' }); toast('Removed'); load(); } catch (err) { toast(err.message); }
+});
 
 load();
 </script>

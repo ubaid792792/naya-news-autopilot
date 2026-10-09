@@ -89,6 +89,32 @@ def _gradient_layer(start_y: int, end_y: int, max_alpha: int, top_down: bool) ->
     return layer
 
 
+def glass_card(canvas: Image.Image, box: tuple[int, int, int, int], radius: int = 24) -> None:
+    """Frosted-glass rounded rectangle: blurred backdrop, smoky tint, soft sheen, light border, shadow.
+    The smoky tint keeps white text readable on bright skies and dark scenes alike."""
+    x0, y0, x1, y1 = box
+    w, h = x1 - x0, y1 - y0
+    shadow = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    ImageDraw.Draw(shadow).rounded_rectangle((x0 + 2, y0 + 8, x1 + 2, y1 + 8), radius, fill=(0, 0, 0, 80))
+    canvas.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(12)))
+
+    glass = canvas.crop(box).filter(ImageFilter.GaussianBlur(18))
+    glass.alpha_composite(Image.new("RGBA", (w, h), (12, 16, 24, 92)))
+    sheen = Image.new("L", (1, h), 0)
+    for y in range(h):
+        sheen.putpixel((0, y), int(46 * max(0.0, 1 - y / (h * 0.55))))
+    white = Image.new("RGBA", (w, h), (255, 255, 255, 0))
+    white.putalpha(sheen.resize((w, h)))
+    glass.alpha_composite(white)
+    mask = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, w - 1, h - 1), radius, fill=255)
+    canvas.paste(glass, (x0, y0), mask)
+
+    border = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    ImageDraw.Draw(border).rounded_rectangle(box, radius, outline=(255, 255, 255, 105), width=2)
+    canvas.alpha_composite(border)
+
+
 def default_logo(brand_name: str, accent: tuple[int, int, int]) -> Image.Image:
     """Wordmark used until a custom logo PNG is uploaded: accent tile + stacked brand name."""
     words = (brand_name or "News").upper().split()[:3]
@@ -274,7 +300,10 @@ def render_card(
         logo.thumbnail((260, 170), Image.LANCZOS)
     else:
         logo = default_logo(brand_name, accent)
-    canvas.alpha_composite(logo, (48, 44))
+    logo = logo.crop(logo.getbbox() or (0, 0, logo.width, logo.height))
+    pad_x, pad_y, left, top = 22, 20, 36, 34
+    glass_card(canvas, (left, top, left + logo.width + 2 * pad_x, top + logo.height + 2 * pad_y))
+    canvas.alpha_composite(logo, (left + pad_x, top + pad_y))
 
     if ai_label:
         d = ImageDraw.Draw(canvas)
