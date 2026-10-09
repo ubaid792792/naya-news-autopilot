@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "live = publish, test = preview only"
+        description: "live = collect + publish, collect = fill queue only, test = preview only"
         type: choice
-        options: [test, live]
+        options: [test, live, collect]
         default: test
       run_id:
         description: "Run id from the control panel (leave empty for manual runs)"
@@ -49,3 +49,4 @@ jobs:
           WORKER_URL: ${{ vars.WORKER_URL }}
           PIPELINE_SECRET: ${{ secrets.PIPELINE_SECRET }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          QUEUE_URL: ${{ secrets.QUEUE_URL }}

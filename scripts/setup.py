@@ -82,7 +82,7 @@ def setup_worker(env: dict) -> str:
     if not m:
         raise SystemExit("Deploy finished but no workers.dev URL was printed:\n" + out[-1500:])
     url = m.group(0)
-    for name in ("DASHBOARD_PASSWORD", "PIPELINE_SECRET", "BUFFER_API_KEY", "GH_TOKEN"):
+    for name in ("DASHBOARD_PASSWORD", "PIPELINE_SECRET", "BUFFER_API_KEY", "GH_TOKEN", "QUEUE_URL"):
         if env.get(name):
             wrangler("secret", "put", name, stdin=env[name])
     print(f"Worker deployed and secrets set: {url}")
@@ -125,7 +125,7 @@ def setup_github(env: dict, worker_url: str | None) -> None:
     print("Code pushed to GitHub")
 
     key = gh("GET", f"/repos/{repo}/actions/secrets/public-key", token).json()
-    for name in ("PIPELINE_SECRET", "GEMINI_API_KEY"):
+    for name in ("PIPELINE_SECRET", "GEMINI_API_KEY", "QUEUE_URL"):
         if env.get(name):
             r = gh("PUT", f"/repos/{repo}/actions/secrets/{name}", token,
                    json={"encrypted_value": seal(key["key"], env[name]), "key_id": key["key_id"]})

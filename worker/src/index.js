@@ -29,6 +29,11 @@ const DEFAULTS = {
     "bright high-end editorial photography, shot on a full-frame camera with a 35mm lens, sunny or brightly lit, vivid natural colours, high clarity",
   image_ai_label: false,
   people_in_images: "none",
+  stories_per_collection: 3,
+  queue_max_items: 30,
+  queue_max_age_hours: 24,
+  queue_order: "freshest",
+  queue_sheet_link: "",
   image_enhance: "normal",
   accent_color: "#FFC72C",
   footer_icons: ["facebook", "instagram", "x", "linkedin", "web"],
@@ -176,6 +181,9 @@ function cleanSettingsPatch(patch) {
   for (const k of ["active_start_hour", "active_end_hour"]) if (k in out) out[k] = Math.max(0, Math.min(24, Math.round(out[k])));
   if ("accent_color" in out && !/^#[0-9a-fA-F]{6}$/.test(out.accent_color)) throw new HttpError(400, "accent colour must look like #FFC72C");
   if ("source_credit" in out && !["none", "name", "link"].includes(out.source_credit)) throw new HttpError(400, "bad source_credit");
+  if ("queue_order" in out && !["freshest", "top"].includes(out.queue_order)) throw new HttpError(400, "bad queue_order");
+  if ("stories_per_collection" in out) out.stories_per_collection = Math.max(1, Math.min(10, Math.round(out.stories_per_collection)));
+  if ("queue_max_items" in out) out.queue_max_items = Math.max(5, Math.min(200, Math.round(out.queue_max_items)));
   if ("image_enhance" in out && !["off", "normal", "strong"].includes(out.image_enhance)) throw new HttpError(400, "bad image_enhance");
   if ("people_in_images" in out && !["none", "anonymous"].includes(out.people_in_images)) throw new HttpError(400, "bad people_in_images");
   return out;
@@ -507,6 +515,7 @@ async function panelState(env, origin) {
     config: {
       buffer: Boolean(env.BUFFER_API_KEY),
       github: Boolean(env.GH_TOKEN && env.GH_REPO),
+      queue: Boolean(env.QUEUE_URL),
       repo: env.GH_REPO || "",
     },
   };
@@ -671,12 +680,28 @@ async function panelRoute(request, env, path, method, origin) {
   }
   if (path === "/api/run" && method === "POST") {
     const b = await body(request);
-    const mode = b.mode === "live" ? "live" : "test";
+    const mode = ["live", "collect"].includes(b.mode) ? b.mode : "test";
     const articleUrl = String(b.article_url || "").trim();
     if (articleUrl && !/^https?:\/\/\S+$/.test(articleUrl)) throw new HttpError(400, "article URL must start with http(s)://");
     const busy = await env.DB.prepare("SELECT COUNT(*) AS n FROM runs WHERE status IN ('dispatched','running')").first();
     if (busy?.n) throw new HttpError(409, "A run is already in progress. Wait for it to finish.");
     return json({ ok: true, run_id: await dispatch(env, mode, "panel", articleUrl) });
+  }
+  if (path === "/api/queue" && method === "GET") {
+    if (!env.QUEUE_URL) return json({ items: [], configured: false });
+    const res = await fetch(`${env.QUEUE_URL}?action=list&limit=100`, { redirect: "follow" });
+    const data = await res.json().catch(() => ({ ok: false, error: `queue sheet answered HTTP ${res.status}` }));
+    if (!data.ok) throw new HttpError(502, `Queue sheet: ${data.error || "unavailable"}`);
+    return json({ items: data.items, configured: true });
+  }
+  if (path === "/api/queue/remove" && method === "POST") {
+    if (!env.QUEUE_URL) throw new HttpError(400, "Queue sheet is not connected");
+    const { link } = await body(request);
+    const res = await fetch(env.QUEUE_URL, { method: "POST", redirect: "follow", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "remove", link, result: "removed in panel" }) });
+    const data = await res.json().catch(() => ({ ok: false }));
+    if (!data.ok) throw new HttpError(502, "Queue sheet did not accept the change");
+    return json({ ok: true });
   }
   if (path === "/api/channels/refresh" && method === "POST") return json({ channels: await refreshChannels(env) });
   if (path === "/api/channels" && method === "POST") {

@@ -17,7 +17,8 @@ from PIL import Image
 
 from . import prompts, references
 from .ai import TextAI, generate_image
-from .feeds import Item, fetch_article_text, fetch_feed, is_due, is_similar, resolve_google_news
+from .feeds import Item, fetch_article_text, fetch_feed, is_due, is_similar, resolve_google_news, title_key
+from .queue_sheet import SheetQueue, to_item
 from .render import render_card
 from .worker_api import WorkerAPI
 
@@ -151,84 +152,157 @@ def single_article(url: str) -> Item:
                 published=datetime.now(timezone.utc))
 
 
+def make_post(item: Item, ctx: dict) -> dict:
+    """Write the post, create the image, render the card and hand it to the Worker (which publishes in live mode)."""
+    s, ai, worker, cfg = ctx["s"], ctx["ai"], ctx["worker"], ctx["cfg"]
+    log.info("writing: %s (%s)", item.title, item.link)
+    data = write_post(ai, item, s, cfg.get("custom_refs", []))
+    prompt = data["image_prompt"].strip() + " " + prompts.image_suffix(s.get("people_in_images", "none"))
+    scene = data.get("scene") or {}
+    log.info("scene: %s", scene)
+    flag_keys = [str(c) for c in (scene.get("flags") or []) if c][:3]
+    building_key = str(scene.get("landmark_key") or "").strip() or None
+    bg, image_model = generate_image(worker, prompt, s.get("image_model"), flag_keys, building_key, cfg.get("custom_refs", []))
+    if image_model == "pollinations":  # trim the corner watermark
+        im = Image.open(io.BytesIO(bg))
+        buf = io.BytesIO()
+        im.crop((0, 0, im.width, int(im.height * 0.93))).convert("RGB").save(buf, "JPEG", quality=95)
+        bg = buf.getvalue()
+    card = render_card(
+        bg, data["headline"], data["highlights"], brand_name=s["brand_name"], accent_hex=s.get("accent_color"),
+        logo_png=ctx["logo"], frame_png=ctx["frame"], footer_icons=s.get("footer_icons"),
+        footer_handle=s.get("footer_handle", ""), ai_label=bool(s.get("image_ai_label")),
+        enhance={"off": 0.0, "normal": 1.0, "strong": 1.6}.get(s.get("image_enhance", "normal"), 1.0))
+    post_id = uuid.uuid4().hex[:12]
+    worker.upload_image(post_id, card)
+    hashtags = clean_hashtags(data.get("hashtags", []), s.get("fixed_hashtags", []), int(s.get("hashtag_count", 9)))
+    res = worker.create_post({
+        "id": post_id, "run_id": ctx["run_id"], "mode": ctx["mode"], "source_url": item.link, "source_name": item.source,
+        "source_title": item.title, "headline": data["headline"], "highlights": data["highlights"],
+        "caption": build_caption(data, item, s, hashtags), "hashtags": hashtags,
+        "image_prompt": prompt, "alt_text": data.get("alt_text", ""), "category": data.get("category", ""),
+        "image_model": image_model, "text_model": ai.used[-1] if ai.used else "",
+    })
+    log.info("post %s -> %s %s", post_id, res.get("status"), res.get("error") or "")
+    return res
+
+
+def collect(ctx: dict, queue: SheetQueue) -> str:
+    """Fetch all sources and add the best new stories to the queue sheet."""
+    s, worker = ctx["s"], ctx["worker"]
+    existing = queue.list(200)
+    have_links = {r["link"] for r in existing}
+    have_keys = [title_key(r.get("title", "")) for r in existing]
+    cands = [c for c in gather_candidates(ctx["cfg"], worker)
+             if c.link not in have_links and not is_similar(c.title_key, have_keys)]
+    k = max(1, int(s.get("stories_per_collection", 3)))
+    picks = select(ctx["ai"], cands, k, s)[:k] if cands else []
+    added = queue.append(picks)
+    worker.mark_seen([{"guid": i.guid, "title_key": i.title_key} for i in picks])
+    pruned = queue.prune(float(s.get("queue_max_age_hours", 24)), int(s.get("queue_max_items", 30)))
+    msg = f"queue: +{added} new, -{pruned} old"
+    log.info(msg)
+    return msg
+
+
+def queue_order(rows: list[dict], order: str) -> list[dict]:
+    if order != "freshest":
+        return rows
+    return sorted(rows, key=lambda r: r.get("published") or r.get("added") or "", reverse=True)
+
+
+def publish_from_queue(ctx: dict, queue: SheetQueue, count: int) -> list[dict]:
+    """Post the next stories from the queue; posted (or unusable) rows move to the Posted tab."""
+    created, attempts = [], 0
+    for row in queue_order(queue.list(100), ctx["s"].get("queue_order", "freshest")):
+        if len(created) >= count or attempts >= count + 3:
+            break
+        attempts += 1
+        item = to_item(row)
+        try:
+            res = make_post(item, ctx)
+        except NotEnoughText as exc:
+            log.info("skipping %s: %s", item.link, exc)
+            if ctx["mode"] != "test":
+                queue.remove(row["link"], result=f"skipped: {exc}")
+            continue
+        except Exception as exc:  # noqa: BLE001
+            if "all text models failed" in str(exc):
+                raise
+            log.error("post failed for %s: %s", item.link, exc)
+            if ctx["mode"] != "test":
+                queue.remove(row["link"], result=f"failed: {str(exc)[:120]}")
+            continue
+        created.append(res)
+        if ctx["mode"] != "test":
+            queue.remove(row["link"], result=res.get("status", ""), image=res.get("image_url", ""))
+    return created
+
+
 def main() -> int:
     worker = WorkerAPI(os.environ["WORKER_URL"], os.environ["PIPELINE_SECRET"])
     mode = os.environ.get("MODE", "test").strip() or "test"
     trigger = os.environ.get("TRIGGER", "manual").strip() or "manual"
     article_url = os.environ.get("ARTICLE_URL", "").strip()
+    queue_url = os.environ.get("QUEUE_URL", "").strip()
     gh_url = ""
     if os.environ.get("GITHUB_RUN_ID"):
         gh_url = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
     run_id = worker.start_run(os.environ.get("RUN_ID", "").strip() or uuid.uuid4().hex[:12], mode, trigger, gh_url)
-    log.info("run %s mode=%s trigger=%s", run_id, mode, trigger)
+    log.info("run %s mode=%s trigger=%s queue=%s", run_id, mode, trigger, bool(queue_url))
 
-    created, status, summary = [], "error", ""
+    created, status, summary, notes = [], "error", "", []
     try:
         cfg = worker.config()
         s = cfg["settings"]
-        ai = TextAI(os.environ.get("GEMINI_API_KEY", ""), worker, s.get("text_models") or None)
+        ctx = {
+            "cfg": cfg, "s": s, "worker": worker, "mode": "test" if mode == "collect" else mode, "run_id": run_id,
+            "ai": TextAI(os.environ.get("GEMINI_API_KEY", ""), worker, s.get("text_models") or None),
+            "logo": worker.asset("logo.png") if cfg.get("assets", {}).get("logo") else None,
+            "frame": worker.asset("frame.png") if cfg.get("assets", {}).get("frame") else None,
+        }
+        queue = SheetQueue(queue_url) if queue_url else None
         count = 1 if mode == "test" else max(0, min(int(s.get("posts_per_run", 1)), int(cfg.get("remaining_today", 1))))
-        if article_url:
-            ordered, count = [single_article(article_url)], 1
-        elif count == 0:
-            status, summary = "skipped", "daily post limit reached"
-            return 0
-        else:
-            ordered = select(ai, gather_candidates(cfg, worker), count, s)
-        if not ordered:
-            status, summary = "empty", "no new stories in feeds"
-            return 0
 
-        logo = worker.asset("logo.png") if cfg.get("assets", {}).get("logo") else None
-        frame = worker.asset("frame.png") if cfg.get("assets", {}).get("frame") else None
-        seen_items, attempts = [], 0
-        for item in ordered:
-            if len(created) >= count or attempts >= count + 2:
-                break
-            attempts += 1
-            log.info("writing: %s (%s)", item.title, item.link)
-            try:
-                data = write_post(ai, item, s, cfg.get("custom_refs", []))
-            except Exception as exc:  # noqa: BLE001
-                log.error("write failed: %s", exc)
-                if "all text models failed" in str(exc):
+        if article_url:
+            item = single_article(article_url)
+            created.append(make_post(item, ctx))
+            worker.mark_seen([{"guid": item.guid, "title_key": item.title_key}])
+            if queue and mode == "live":
+                queue.remove(article_url, result=created[-1].get("status", ""), image=created[-1].get("image_url", ""))
+        elif queue:
+            notes.append(collect(ctx, queue))
+            if mode == "collect":
+                status, summary = "success", notes[-1]
+                return 0
+            if count == 0:
+                status, summary = "skipped", f"daily post limit reached; {notes[-1]}"
+                return 0
+            created = publish_from_queue(ctx, queue, count)
+            if not created:
+                status, summary = "empty", f"queue has no usable stories; {notes[-1]}"
+                return 0
+        else:
+            if count == 0:
+                status, summary = "skipped", "daily post limit reached"
+                return 0
+            for item in select(ctx["ai"], gather_candidates(cfg, worker), count, s):
+                if len(created) >= count:
                     break
-                seen_items.append({"guid": item.guid, "title_key": item.title_key})
-                continue
-            prompt = data["image_prompt"].strip() + " " + prompts.image_suffix(s.get("people_in_images", "none"))
-            log.info("scene: %s", data.get("scene"))
-            scene = data.get("scene") or {}
-            flag_keys = [str(c) for c in (scene.get("flags") or []) if c][:3]
-            building_key = str(scene.get("landmark_key") or "").strip() or None
-            bg, image_model = generate_image(worker, prompt, s.get("image_model"), flag_keys, building_key,
-                                             cfg.get("custom_refs", []))
-            if image_model == "pollinations":  # trim the corner watermark
-                im = Image.open(io.BytesIO(bg))
-                buf = io.BytesIO()
-                im.crop((0, 0, im.width, int(im.height * 0.93))).convert("RGB").save(buf, "JPEG", quality=95)
-                bg = buf.getvalue()
-            card = render_card(
-                bg, data["headline"], data["highlights"], brand_name=s["brand_name"], accent_hex=s.get("accent_color"),
-                logo_png=logo, frame_png=frame, footer_icons=s.get("footer_icons"),
-                footer_handle=s.get("footer_handle", ""), ai_label=bool(s.get("image_ai_label")),
-                enhance={"off": 0.0, "normal": 1.0, "strong": 1.6}.get(s.get("image_enhance", "normal"), 1.0))
-            post_id = uuid.uuid4().hex[:12]
-            worker.upload_image(post_id, card)
-            hashtags = clean_hashtags(data.get("hashtags", []), s.get("fixed_hashtags", []), int(s.get("hashtag_count", 9)))
-            res = worker.create_post({
-                "id": post_id, "run_id": run_id, "mode": mode, "source_url": item.link, "source_name": item.source,
-                "source_title": item.title, "headline": data["headline"], "highlights": data["highlights"],
-                "caption": build_caption(data, item, s, hashtags), "hashtags": hashtags,
-                "image_prompt": prompt, "alt_text": data.get("alt_text", ""), "category": data.get("category", ""),
-                "image_model": image_model, "text_model": ai.used[-1] if ai.used else "",
-            })
-            log.info("post %s -> %s %s", post_id, res.get("status"), res.get("error") or "")
-            created.append(res)
-            seen_items.append({"guid": item.guid, "title_key": item.title_key})
-        worker.mark_seen(seen_items)
+                try:
+                    created.append(make_post(item, ctx))
+                except NotEnoughText as exc:
+                    log.info("skipping %s: %s", item.link, exc)
+                worker.mark_seen([{"guid": item.guid, "title_key": item.title_key}])
+            if not created:
+                status, summary = "empty", "no new stories in feeds"
+                return 0
+
         ok = [c for c in created if c.get("status") != "failed"]
         status = "success" if ok else "error"
-        summary = f"{len(ok)} post(s): " + ", ".join(c.get("status", "?") for c in created) if created else "nothing created"
+        summary = f"{len(ok)} post(s): " + ", ".join(c.get("status", "?") for c in created)
+        if notes:
+            summary += "; " + "; ".join(notes)
         return 0 if ok else 1
     except Exception as exc:  # noqa: BLE001
         log.exception("run failed")
