@@ -50,8 +50,14 @@ def title_key(title: str) -> str:
     return " ".join(w for w in words if w not in STOPWORDS)
 
 
+GENERIC = set("pakistan pakistani govt government says said new rs pc per cent percent".split())
+
+
 def is_similar(key: str, others: list[str], threshold: float = 0.72) -> bool:
+    """Same story from different outlets: near-identical titles, or at least 4 shared key words
+    making up half of the shorter headline."""
     words = set(key.split())
+    core = words - GENERIC
     for other in others:
         if not other:
             continue
@@ -59,6 +65,10 @@ def is_similar(key: str, others: list[str], threshold: float = 0.72) -> bool:
             return True
         other_words = set(other.split())
         if words and other_words and len(words & other_words) / len(words | other_words) >= 0.6:
+            return True
+        other_core = other_words - GENERIC
+        shared = len(core & other_core)
+        if shared >= 4 and shared / max(1, min(len(core), len(other_core))) >= 0.5:
             return True
     return False
 

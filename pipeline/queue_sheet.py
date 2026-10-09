@@ -16,7 +16,7 @@ class SheetQueue:
     def __init__(self, url: str):
         self.url = url
 
-    def _post(self, payload: dict) -> dict:
+    def _post(self, payload: dict, expect: str | None = None) -> dict:
         last = None
         for attempt in range(3):
             try:
@@ -26,6 +26,8 @@ class SheetQueue:
                 data = r.json()
                 if not data.get("ok"):
                     raise RuntimeError(data.get("error") or "queue error")
+                if expect and expect not in data:
+                    raise RuntimeError(f"unexpected reply: {str(data)[:120]}")
                 return data
             except (requests.RequestException, ValueError, RuntimeError) as exc:
                 last = exc
@@ -33,19 +35,19 @@ class SheetQueue:
         raise RuntimeError(f"queue sheet unavailable: {last}")
 
     def list(self, limit: int = 50) -> list[dict]:
-        return self._post({"action": "list", "limit": limit})["items"]
+        return self._post({"action": "list", "limit": limit}, "items")["items"]
 
     def append(self, items: list[Item]) -> int:
         payload = [{"title": i.title, "source": i.source, "link": i.link, "category": i.category,
                     "summary": i.summary, "published": i.published.isoformat() if i.published else ""} for i in items]
-        return self._post({"action": "append", "items": payload})["added"] if payload else 0
+        return self._post({"action": "append", "items": payload}, "added")["added"] if payload else 0
 
     def remove(self, link: str, result: str = "", image: str = "", title: str = "", source: str = "") -> int:
         return self._post({"action": "remove", "link": link, "result": result, "image": image,
-                           "title": title, "source": source})["removed"]
+                           "title": title, "source": source}, "removed")["removed"]
 
     def prune(self, max_age_hours: float, max_items: int) -> int:
-        return self._post({"action": "prune", "max_age_hours": max_age_hours, "max_items": max_items})["removed"]
+        return self._post({"action": "prune", "max_age_hours": max_age_hours, "max_items": max_items}, "removed")["removed"]
 
 
 def to_item(row: dict) -> Item:
