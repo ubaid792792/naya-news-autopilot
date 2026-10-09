@@ -291,7 +291,8 @@ async function syncSendingPosts(env) {
       if (!r.buffer_post_id || r.buffer_status !== "sending") continue;
       const data = await buffer(env, `query { post(input: { id: ${gqlString(r.buffer_post_id)} }) { status externalLink error { message rawError } } }`);
       const p = data.post;
-      r.buffer_status = p.status;
+      // Check once only (free Buffer API budget); "sending" after the check stays as checked.
+      r.buffer_status = p.status === "sending" ? "sending-checked" : p.status;
       if (p.externalLink) r.link = p.externalLink;
       if (p.status === "error") {
         r.ok = false;
