@@ -8,12 +8,12 @@ binding = "AI"
 
 [[kv_namespaces]]
 binding = "IMAGES"
-id = "REPLACE_KV_ID"
+id = "997a7c301dd84f94a1cb02db9ab93c6b"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "naya-news-db"
-database_id = "REPLACE_D1_ID"
+database_id = "59020b9f-7a6f-4fcb-85f4-fa78bc6983c3"
 
 [triggers]
 crons = ["*/5 * * * *"]
