@@ -38,7 +38,7 @@
   .s-ok { color:var(--ok); background:var(--okbg); } .s-warn { color:var(--warn); background:var(--warnbg); }
   .s-bad { color:var(--bad); background:var(--badbg); } .s-info { color:var(--info); background:var(--infobg); }
   .s-muted { color:var(--muted); background:var(--soft); }
-  .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:16px; }
+  .stats { display:grid; grid-template-columns:repeat(5,1fr); gap:12px; margin-bottom:16px; }
   .stat { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px 16px; min-width:0; }
   .stat .k { color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
   .stat .v { font-size:20px; font-weight:700; margin-top:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -114,6 +114,7 @@
     <div class="stat"><div class="k">Posted today</div><div class="v" id="stToday">-</div><div class="d" id="stTodayD">-</div></div>
     <div class="stat"><div class="k">Last run</div><div class="v" id="stLast">-</div><div class="d" id="stLastD">-</div></div>
     <div class="stat"><div class="k">Channels</div><div class="v" id="stChan">-</div><div class="d" id="stChanD">-</div></div>
+    <div class="stat"><div class="k">Free AI allowance today</div><div class="v" id="stAi">-</div><div class="d" id="stAiD">-</div></div>
   </section>
 
   <nav class="tabs" id="tabs">
@@ -173,12 +174,13 @@
       <p class="help">The cloud scheduler checks every 5 minutes and starts a run when one is due. Times use the time zone below.</p>
       <div class="grid3">
         <div class="field"><label>Run every</label><select name="interval_minutes">
-          <option value="15">15 minutes</option><option value="20">20 minutes</option><option value="30">30 minutes</option><option value="45">45 minutes</option>
+          <option value="5">5 minutes</option><option value="10">10 minutes</option><option value="15">15 minutes</option><option value="20">20 minutes</option><option value="30">30 minutes</option><option value="32">32 minutes</option><option value="45">45 minutes</option>
           <option value="60">1 hour</option><option value="90">1.5 hours</option><option value="120">2 hours</option>
           <option value="180">3 hours</option><option value="240">4 hours</option><option value="360">6 hours</option>
           <option value="480">8 hours</option><option value="720">12 hours</option><option value="1440">24 hours</option></select></div>
-        <div class="field"><label>Posts per run</label><input name="posts_per_run" type="number" min="1" max="5"></div>
-        <div class="field"><label>Max posts per day (Buffer allows 50)</label><input name="daily_cap" type="number" min="1" max="50"></div>
+        <div class="field"><label>Posts per run</label><input name="posts_per_run" type="number" min="1" max="10"></div>
+        <div class="field"><label>Max posts per day (1-1500)</label><input name="daily_cap" type="number" min="1" max="1500">
+          <div class="hint">Each network also has its own limit: Buffer 50 posts/day per channel, Instagram 100/day. Full ones are skipped until the next day.</div></div>
         <div class="field"><label>Active from (hour) - same as "until" = all day</label><select name="active_start_hour" data-hours></select></div>
         <div class="field"><label>Active until (hour)</label><select name="active_end_hour" data-hours></select></div>
         <div class="field"><label>Time zone</label><select name="tz_offset_minutes">
@@ -228,9 +230,9 @@
       <p class="help">Each image: AI picture of the story (no people), your logo top-left, the headline with highlighted key words, social icons at the bottom.</p>
       <div class="grid3">
         <div class="field"><label>Highlight colour</label><input name="accent_color" type="color" style="height:40px;padding:4px"></div>
-        <div class="field"><label>Image AI model</label><select name="image_model">
-          <option value="@cf/black-forest-labs/flux-2-klein-4b">FLUX.2 klein (best, ~60/day free)</option>
-          <option value="@cf/black-forest-labs/flux-1-schnell">FLUX.1 schnell (more per day)</option></select></div>
+        <div class="field"><label>Image AI model</label><select name="image_model" id="imgModel">
+          <option value="auto">Auto - best quality the free daily allowance allows (recommended)</option></select>
+          <div class="hint">Better models use more of the free daily AI allowance; Auto steps down when it runs low.</div></div>
         <div class="field"><label>Colour and brightness boost</label><select name="image_enhance">
           <option value="normal">Normal (bright and vibrant)</option><option value="strong">Strong</option>
           <option value="off">Off (as generated)</option></select></div>
@@ -357,6 +359,12 @@ function render() {
   const last = state.runs[0];
   $('#stLast').innerHTML = last ? pill(last.status) : '-';
   $('#stLastD').textContent = last ? ago(last.started_at) + ' - ' + (last.summary || last.trigger) : 'No runs yet';
+  const st = state.stats;
+  if (st.neurons_total) {
+    const pct = Math.min(100, Math.round(100 * st.neurons_used / st.neurons_total));
+    $('#stAi').textContent = pct + '% used';
+    $('#stAiD').textContent = Math.round(st.neurons_used) + ' / ' + st.neurons_total + ' units; Buffer API left this month: ' + st.buffer_api_left;
+  }
   const chans = (s.buffer_channels || []);
   const on = chans.filter(c => c.enabled);
   $('#stChan').textContent = on.length + ' active';
@@ -469,6 +477,11 @@ let formsFilled = false;
 function fillForms() {
   if (formsFilled) return; formsFilled = true;
   const s = state.settings;
+  const sel = $('#imgModel');
+  if (sel && state.image_models && sel.options.length === 1) {
+    for (const m of state.image_models) sel.insertAdjacentHTML('beforeend', '<option value="' + esc(m.id) + '">' + esc(m.label) + ' (~' + Math.max(1, Math.floor(8500 / m.cost)) + ' images/day free)</option>');
+    sel.insertAdjacentHTML('beforeend', '<option value="pollinations">Pollinations only (free, lower quality)</option>');
+  }
   $$('select[data-hours]').forEach(sel => sel.innerHTML = Array.from({ length: 25 }, (_, h) => '<option value="' + h + '">' + String(h).padStart(2, '0') + ':00</option>').join(''));
   $('#iconChecks').innerHTML = ICONS.map(i => '<label class="switch"><input type="checkbox" data-icon="' + i + '"><i></i><span>' + i + '</span></label>').join('');
   $$('form[data-form] [name]').forEach(el => {

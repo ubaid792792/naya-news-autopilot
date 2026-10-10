@@ -26,7 +26,6 @@ DEFAULT_TEXT_MODELS = [
     "gemini-flash-lite-latest", "gemini-2.5-flash-lite", "gemma-4-31b-it", "gemma-4-26b-a4b-it",
 ]
 LITE_TEXT_MODELS = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-flash-lite-latest", "gemini-2.5-flash-lite"]
-IMAGE_MODELS = ["@cf/black-forest-labs/flux-2-klein-4b", "@cf/black-forest-labs/flux-1-schnell"]
 
 
 def parse_json(text: str) -> dict:
@@ -122,30 +121,20 @@ class TextAI:
 def generate_image(worker: WorkerAPI, prompt: str, preferred: str | None = None,
                    flag_keys: list[str] | None = None, building_key: str | None = None,
                    custom_refs: list[dict] | None = None) -> tuple[bytes, str]:
-    """Try each free image model. FLUX.2 models also get real reference pictures (flags, emblems,
-    official buildings) so those details come out accurate."""
-    models = [preferred] + [m for m in IMAGE_MODELS if m != preferred] if preferred else IMAGE_MODELS
+    """Cloudflare Workers AI through the Worker (it chooses the model within the free allowance and
+    passes real reference pictures to models that accept them), then Pollinations as a last resort."""
     flag_keys = flag_keys or []
     ref_text, refs = (references.resolve(flag_keys, building_key, custom_refs, worker.base)
                       if (flag_keys or building_key) else ("", []))
     plain_text = references.describe_only(flag_keys, building_key, custom_refs)
     errors = []
-    for model in models:
-        use_refs = "flux-2" in model and bool(refs)
-        full = f"{prompt} {ref_text if use_refs else plain_text}".strip()
+    if preferred != "pollinations":
         try:
-            image = worker.generate_image(full, 1024, 1232, model, refs if use_refs else None)
-            return image, model + (f" +{len(refs)} refs" if use_refs else "")
+            return worker.generate_image(f"{prompt} {ref_text}".strip(), f"{prompt} {plain_text}".strip(), refs,
+                                         preferred or "auto")
         except Exception as exc:  # noqa: BLE001
-            errors.append(f"{model}: {exc}")
-            log.warning("image model failed: %s", exc)
-            if use_refs and "flagged" in str(exc).lower():
-                # The safety filter sometimes rejects a reference combination; retry with text only.
-                try:
-                    image = worker.generate_image(f"{prompt} {plain_text}".strip(), 1024, 1232, model, None)
-                    return image, model + " (text-only retry)"
-                except Exception as exc2:  # noqa: BLE001
-                    errors.append(f"{model} text-only: {exc2}")
+            errors.append(f"workers-ai: {exc}")
+            log.warning("Cloudflare image models failed: %s", str(exc)[:300])
     try:
         full = f"{prompt} {plain_text}".strip()
         url = ("https://image.pollinations.ai/prompt/" + urllib.parse.quote(full[:1200])

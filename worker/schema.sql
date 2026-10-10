@@ -70,3 +70,11 @@ CREATE TABLE IF NOT EXISTS images (
   data BLOB NOT NULL,
   created_at TEXT
 );
+
+-- Daily counters for free-tier limits (AI neurons, Buffer posts per channel, Buffer API calls, Instagram posts).
+CREATE TABLE IF NOT EXISTS usage (
+  day TEXT NOT NULL,
+  key TEXT NOT NULL,
+  n REAL NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, key)
+);

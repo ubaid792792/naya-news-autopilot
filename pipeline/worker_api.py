@@ -45,14 +45,16 @@ class WorkerAPI:
         self._call("PATCH", f"/pipeline/runs/{run_id}", json={
             "status": status, "summary": summary, "log": log[-20000:]})
 
-    def generate_image(self, prompt: str, width: int, height: int, model: str,
-                       references: list[str] | None = None) -> bytes:
-        res = self._call("POST", "/pipeline/ai/image", timeout=150, retries=1, json={
-            "prompt": prompt, "width": width, "height": height, "model": model,
-            "references": references or []})
+    def generate_image(self, prompt: str, prompt_plain: str, references: list[str] | None = None,
+                       model: str = "auto") -> tuple[bytes, str]:
+        """The Worker picks the best model the free daily allowance allows ("auto") or uses `model`,
+        falling back to cheaper ones. Returns (image bytes, model used)."""
+        res = self._call("POST", "/pipeline/ai/image", timeout=180, retries=1, json={
+            "prompt": prompt, "prompt_plain": prompt_plain, "references": references or [],
+            "model": model, "width": 1024, "height": 1232})
         if not res.get("image"):
             raise WorkerError(f"image model returned no image: {str(res)[:200]}")
-        return base64.b64decode(res["image"])
+        return base64.b64decode(res["image"]), res.get("model", model)
 
     def llm(self, system: str, user: str, size: str = "large") -> str:
         res = self._call("POST", "/pipeline/ai/text", timeout=150, retries=1, json={

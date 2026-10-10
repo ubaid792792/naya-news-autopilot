@@ -4,6 +4,8 @@
 import DASHBOARD_HTML from "./dashboard.html";
 import LOGIN_HTML from "./login.html";
 import * as social from "./social.js";
+import * as images from "./images.js";
+import * as usage from "./usage.js";
 
 const DEFAULTS = {
   enabled: false,
@@ -26,7 +28,7 @@ const DEFAULTS = {
   disclaimer:
     "Disclaimer: This content is for informational purposes only. Image is AI generated and just for reference.",
   source_credit: "none",
-  image_model: "@cf/black-forest-labs/flux-2-klein-4b",
+  image_model: "auto",
   image_style:
     "bright high-end editorial photography, shot on a full-frame camera with a 35mm lens, sunny or brightly lit, vivid natural colours, high clarity",
   image_ai_label: false,
@@ -224,10 +226,9 @@ function cleanSettingsPatch(patch) {
     else if (Array.isArray(def)) out[k] = Array.isArray(v) ? v.map(String).filter(Boolean) : String(v).split(/[\s,]+/).filter(Boolean);
     else out[k] = String(v ?? "");
   }
-  if ("interval_minutes" in out && out.interval_minutes < 15) throw new HttpError(400, "interval must be at least 15 minutes");
-  if ("posts_per_run" in out) out.posts_per_run = Math.max(1, Math.min(5, Math.round(out.posts_per_run)));
-  // Buffer accepts at most 50 posts per channel per day.
-  if ("daily_cap" in out) out.daily_cap = Math.max(1, Math.min(50, Math.round(out.daily_cap)));
+  if ("interval_minutes" in out && out.interval_minutes < 5) throw new HttpError(400, "interval must be at least 5 minutes");
+  if ("posts_per_run" in out) out.posts_per_run = Math.max(1, Math.min(10, Math.round(out.posts_per_run)));
+  if ("daily_cap" in out) out.daily_cap = Math.max(1, Math.min(1500, Math.round(out.daily_cap)));
   for (const k of ["active_start_hour", "active_end_hour", "day_start_hour"]) if (k in out) out[k] = Math.max(0, Math.min(24, Math.round(out[k])));
   if ("accent_color" in out && !/^#[0-9a-fA-F]{6}$/.test(out.accent_color)) throw new HttpError(400, "accent colour must look like #FFC72C");
   if ("source_credit" in out && !["none", "name", "link"].includes(out.source_credit)) throw new HttpError(400, "bad source_credit");
@@ -261,8 +262,6 @@ function localDayStartIso(s, ms = Date.now()) {
   return new Date(start).toISOString();
 }
 
-const BUFFER_DAILY_LIMIT = 50;
-
 async function publishedSince(env, iso) {
   const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM posts WHERE status IN ('published','partial') AND published_at >= ?")
     .bind(iso)
@@ -272,13 +271,17 @@ async function publishedSince(env, iso) {
 
 const publishedToday = (env, s) => publishedSince(env, localDayStartIso(s));
 
-// Posts still allowed now: the user's daily cap for the posting day, and Buffer's own 50-per-calendar-day limit.
+// Posts still allowed by the user's daily cap. Each destination's own limit (Buffer 50 per channel
+// per day, Instagram 100 per day) is checked separately when posting.
 async function remainingToday(env, s) {
-  const [day, calendar] = await Promise.all([
-    publishedToday(env, s),
-    publishedSince(env, localDayStartIso({ ...s, day_start_hour: 0 })),
-  ]);
-  return Math.max(0, Math.min(s.daily_cap - day, BUFFER_DAILY_LIMIT - calendar));
+  return Math.max(0, s.daily_cap - (await publishedToday(env, s)));
+}
+
+// Rough number of posts still to come before the free AI allowance resets (00:00 UTC).
+async function postsLeftUtc(env, s) {
+  const minutes = (Date.parse(`${usage.utcDay(Date.now() + 86400000)}T00:00:00Z`) - Date.now()) / 60000;
+  const slots = Math.ceil(minutes / Math.max(5, s.interval_minutes)) * (s.posts_per_run || 1);
+  return Math.max(1, Math.min(await remainingToday(env, s), slots));
 }
 
 function nextRunEstimate(s) {
@@ -340,6 +343,7 @@ async function tick(env) {
   const last = s.last_dispatch_at ? Date.parse(s.last_dispatch_at) : 0;
   if (Date.now() - last < s.interval_minutes * 60000 - 90000) return;
   if ((await remainingToday(env, s)) <= 0) return;
+  if (!(await usage.capacity(env, s)).any) return;
   const busy = await env.DB.prepare("SELECT COUNT(*) AS n FROM runs WHERE status IN ('dispatched','running')").first();
   if (busy?.n) return;
   await saveSettings(env, { last_dispatch_at: nowIso() });
@@ -475,6 +479,7 @@ async function resolveSource(raw) {
 
 async function buffer(env, query) {
   if (!env.BUFFER_API_KEY) throw new HttpError(500, "BUFFER_API_KEY is not set on the Worker");
+  await usage.addUsage(env, "buffer_api", 1);
   const res = await fetch("https://api.buffer.com", {
     method: "POST",
     headers: { authorization: `Bearer ${env.BUFFER_API_KEY}`, "content-type": "application/json" },
@@ -521,6 +526,8 @@ async function imageBytes(env, id) {
 async function publishPost(env, origin, post, s) {
   const imageUrl = `${origin}/img/${post.id}.jpg`;
   const results = [];
+  const cap = await usage.capacity(env, s);
+  const skipped = [];
   if (s.publish_linkedin && s.li_token) {
     try {
       const r = await social.linkedinPublish(s, post, await imageBytes(env, post.id));
@@ -529,15 +536,21 @@ async function publishPost(env, origin, post, s) {
       results.push({ channel: s.li_name || "LinkedIn", service: "linkedin", ok: false, error: err.message });
     }
   }
-  if (s.publish_instagram && s.ig_token) {
+  if (s.publish_instagram && s.ig_token && !cap.instagram) skipped.push("Instagram (100 posts/day reached)");
+  if (s.publish_instagram && s.ig_token && cap.instagram) {
     try {
       const r = await social.instagramPublish(s, post, imageUrl);
+      await usage.addUsage(env, "instagram_post", 1);
       results.push({ channel: `@${s.ig_username || "instagram"}`, service: "instagram", ok: true, link: r.link, remote_id: r.remote_id });
     } catch (err) {
       results.push({ channel: `@${s.ig_username || "instagram"}`, service: "instagram", ok: false, error: err.message });
     }
   }
   for (const ch of (s.buffer_channels || []).filter((c) => c.enabled)) {
+    if (!cap.buffer.find((b) => b.id === ch.id)?.ok) {
+      skipped.push(`${ch.service} ${ch.name} (Buffer's 50 posts/day or monthly API limit reached)`);
+      continue;
+    }
     // X allows 280 characters, so Buffer channels for X get the short caption.
     const text = ch.service === "twitter" || ch.service === "x" ? post.caption_short || post.caption : post.caption;
     const q = `mutation { createPost(input: { text: ${gqlString(text)}, channelId: ${gqlString(ch.id)}, schedulingType: automatic, mode: shareNow, assets: [{ image: { url: ${gqlString(imageUrl)} } }] }) { __typename ... on PostActionSuccess { post { id status dueAt externalLink error { message rawError } } } ... on MutationError { message } } }`;
@@ -545,6 +558,7 @@ async function publishPost(env, origin, post, s) {
       const data = await buffer(env, q);
       const r = data.createPost;
       if (r.post && r.post.status !== "error") {
+        await usage.addUsage(env, `buffer_post:${ch.id}`, 1, usage.localDay(s));
         results.push({ channel: ch.name, service: ch.service, ok: true, buffer_post_id: r.post.id, buffer_status: r.post.status, link: r.post.externalLink || null });
       } else if (r.post) {
         const why = (r.post.error && (r.post.error.rawError || r.post.error.message)) || "Buffer could not publish the post";
@@ -555,7 +569,8 @@ async function publishPost(env, origin, post, s) {
     }
   }
   if (!results.length) {
-    return { status: "failed", error: "No destination is connected. Open Channels in the panel and connect LinkedIn, Instagram or Buffer.", results };
+    const why = skipped.length ? `Daily limits reached: ${skipped.join("; ")}` : "No destination is connected. Open Channels in the panel and connect Instagram or Buffer.";
+    return { status: "failed", error: why, results };
   }
   const okCount = results.filter((r) => r.ok).length;
   const status = okCount === results.length ? "published" : okCount ? "partial" : "failed";
@@ -572,29 +587,6 @@ async function applyPublish(env, origin, post, s) {
 }
 
 // ---------- Workers AI ----------
-
-async function aiImage(env, { prompt, width = 1024, height = 1232, model, references = [] }) {
-  if (!prompt) throw new HttpError(400, "prompt required");
-  const m = model || DEFAULTS.image_model;
-  let res;
-  if (m.includes("flux-2")) {
-    const form = new FormData();
-    form.append("prompt", prompt.slice(0, 2000));
-    form.append("width", String(width));
-    form.append("height", String(height));
-    // Reference pictures (e.g. real flag images) keep small details accurate; max 4, each < 512px.
-    references.slice(0, 4).forEach((b64, i) => {
-      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-      form.append(`input_image_${i}`, new Blob([bytes], { type: "image/png" }), `ref${i}.png`);
-    });
-    const packed = new Response(form);
-    res = await env.AI.run(m, { multipart: { body: packed.body, contentType: packed.headers.get("content-type") } });
-  } else {
-    res = await env.AI.run(m, { prompt: prompt.slice(0, 2000), steps: 4 });
-  }
-  if (!res?.image) throw new HttpError(502, `${m} returned no image`);
-  return { image: res.image, model: m };
-}
 
 async function aiText(env, { system, user, size = "large" }) {
   const model = TEXT_MODELS[size] || TEXT_MODELS.large;
@@ -613,6 +605,7 @@ async function aiText(env, { system, user, size = "large" }) {
     res = await env.AI.run(model, input); // model without JSON mode
   }
   const text = typeof res.response === "string" ? res.response : JSON.stringify(res.response);
+  await usage.addUsage(env, "neurons", size === "small" ? 30 : 250);
   return { text, model };
 }
 
@@ -649,7 +642,12 @@ async function panelState(env, origin) {
     feeds: feeds.results,
     posts: posts.results.map((r) => rowToPost(r, origin)),
     runs: runs.results,
-    stats: { published_today: today, published_total: total?.n || 0, next_run: nextRunEstimate(s), now: nowIso() },
+    stats: {
+      published_today: today, published_total: total?.n || 0, next_run: nextRunEstimate(s), now: nowIso(),
+      neurons_used: await usage.getUsage(env, "neurons"), neurons_total: usage.NEURONS_PER_DAY,
+      buffer_api_left: await usage.bufferApiLeft(env),
+    },
+    image_models: images.IMAGE_MODELS.map((m) => ({ id: m.id, label: m.label, cost: m.cost })),
     assets: { logo: s.asset_logo, frame: s.asset_frame },
     config: {
       buffer: Boolean(env.BUFFER_API_KEY),
@@ -806,7 +804,11 @@ async function pipelineRoute(request, env, path, method, origin) {
       .run();
     return json({ ok: true });
   }
-  if (path === "/pipeline/ai/image" && method === "POST") return json(await aiImage(env, await body(request)));
+  if (path === "/pipeline/ai/image" && method === "POST") {
+    const b = await body(request);
+    const s = await getSettings(env);
+    return json(await images.generate(env, { ...b, model: b.model || s.image_model, posts_left: await postsLeftUtc(env, s) }));
+  }
   if (path === "/pipeline/ai/text" && method === "POST") return json(await aiText(env, await body(request)));
   if ((m = path.match(/^\/pipeline\/images\/([a-f0-9]{8,32})$/)) && method === "PUT") {
     const s = await getSettings(env);
