@@ -52,6 +52,21 @@ def build_caption(data: dict, item: Item, s: dict, hashtags: list[str]) -> str:
     return "\n\n".join(blocks)
 
 
+def build_short_caption(data: dict, hashtags: list[str], limit: int = 270) -> str:
+    """X allows 280 characters: the headline, the lead sentence if it fits, and three hashtags."""
+    head = data["headline"]
+    tags = " ".join(hashtags[:3])
+    lead = (data.get("paragraphs") or [""])[0].strip()
+    text = f"{head}\n\n{lead}\n\n{tags}"
+    if len(text) <= limit:
+        return text
+    room = limit - len(head) - len(tags) - 5
+    if room > 40:
+        cut = lead[:room].rsplit(" ", 1)[0].rstrip(",;:") + "…"
+        return f"{head}\n\n{cut}\n\n{tags}"
+    return f"{head}\n\n{tags}"[:limit]
+
+
 def gather_candidates(cfg: dict, worker: WorkerAPI) -> list[Item]:
     s = cfg["settings"]
     seen = set(cfg.get("seen", []))
@@ -180,6 +195,7 @@ def make_post(item: Item, ctx: dict) -> dict:
         "id": post_id, "run_id": ctx["run_id"], "mode": ctx["mode"], "source_url": item.link, "source_name": item.source,
         "source_title": item.title, "headline": data["headline"], "highlights": data["highlights"],
         "caption": build_caption(data, item, s, hashtags), "hashtags": hashtags,
+        "caption_short": build_short_caption(data, hashtags),
         "image_prompt": prompt, "alt_text": data.get("alt_text", ""), "category": data.get("category", ""),
         "image_model": image_model, "text_model": ai.used[-1] if ai.used else "",
     })

@@ -3,6 +3,7 @@
 // hosts rendered images (KV, auto-expiring) and publishes posts through the Buffer API.
 import DASHBOARD_HTML from "./dashboard.html";
 import LOGIN_HTML from "./login.html";
+import * as social from "./social.js";
 
 const DEFAULTS = {
   enabled: false,
@@ -51,8 +52,22 @@ const DEFAULTS = {
   asset_logo: false,
   asset_frame: false,
   custom_refs: [],
+  publish_linkedin: true,
+  publish_instagram: true,
+  li_token: null,
+  li_expires: null,
+  li_person: null,
+  li_name: null,
+  ig_token: null,
+  ig_expires: null,
+  ig_token_at: null,
+  ig_user_id: null,
+  ig_username: null,
 };
-const INTERNAL_KEYS = new Set(["buffer_channels", "last_dispatch_at", "last_cleanup_date", "asset_logo", "asset_frame", "custom_refs"]);
+const INTERNAL_KEYS = new Set(["buffer_channels", "last_dispatch_at", "last_cleanup_date", "asset_logo", "asset_frame", "custom_refs",
+  "li_token", "li_expires", "li_person", "li_name", "ig_token", "ig_expires", "ig_token_at", "ig_user_id", "ig_username"]);
+// Settings safe to show in the panel or send to the pipeline (no access tokens).
+const publicSettings = (s) => Object.fromEntries(Object.entries(s).filter(([k]) => !social.SECRET_SETTING_KEYS.includes(k)));
 const TEXT_MODELS = { large: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", small: "@cf/meta/llama-3.1-8b-instruct-fast" };
 const SESSION_COOKIE = "nn_session";
 const SESSION_DAYS = 30;
@@ -282,6 +297,12 @@ async function tick(env) {
     .bind(nowIso(), stale)
     .run();
   await dailyCleanup(env, s);
+  try {
+    const renewed = await social.instagramRefresh(s);
+    if (renewed) await saveSettings(env, renewed);
+  } catch (err) {
+    console.error(err.message);
+  }
   // Final-status checks cost one Buffer API call per post; skip them at high volume so a month of
   // posting fits Buffer's free 3,000 calls per 30 days.
   if (s.daily_cap <= 40) await syncSendingPosts(env).catch((err) => console.error("status sync failed", err.message));
@@ -462,15 +483,35 @@ async function refreshChannels(env) {
   return channels;
 }
 
+async function imageBytes(env, id) {
+  const row = await env.DB.prepare("SELECT data FROM images WHERE id = ?").bind(id).first();
+  return row ? new Uint8Array(row.data) : await env.IMAGES.get(`img:${id}`, { type: "arrayBuffer" });
+}
+
+// Publish to every enabled destination: LinkedIn and Instagram directly, Buffer channels (X).
 async function publishPost(env, origin, post, s) {
-  const channels = (s.buffer_channels || []).filter((c) => c.enabled);
-  if (!channels.length) {
-    return { status: "failed", error: "No Buffer channel enabled. Connect LinkedIn in Buffer, then click Refresh channels in the panel.", results: [] };
-  }
   const imageUrl = `${origin}/img/${post.id}.jpg`;
   const results = [];
-  for (const ch of channels) {
-    const q = `mutation { createPost(input: { text: ${gqlString(post.caption)}, channelId: ${gqlString(ch.id)}, schedulingType: automatic, mode: shareNow, assets: [{ image: { url: ${gqlString(imageUrl)} } }] }) { __typename ... on PostActionSuccess { post { id status dueAt externalLink error { message rawError } } } ... on MutationError { message } } }`;
+  if (s.publish_linkedin && s.li_token) {
+    try {
+      const r = await social.linkedinPublish(s, post, await imageBytes(env, post.id));
+      results.push({ channel: s.li_name || "LinkedIn", service: "linkedin", ok: true, link: r.link, remote_id: r.remote_id });
+    } catch (err) {
+      results.push({ channel: s.li_name || "LinkedIn", service: "linkedin", ok: false, error: err.message });
+    }
+  }
+  if (s.publish_instagram && s.ig_token) {
+    try {
+      const r = await social.instagramPublish(s, post, imageUrl);
+      results.push({ channel: `@${s.ig_username || "instagram"}`, service: "instagram", ok: true, link: r.link, remote_id: r.remote_id });
+    } catch (err) {
+      results.push({ channel: `@${s.ig_username || "instagram"}`, service: "instagram", ok: false, error: err.message });
+    }
+  }
+  for (const ch of (s.buffer_channels || []).filter((c) => c.enabled)) {
+    // X allows 280 characters, so Buffer channels for X get the short caption.
+    const text = ch.service === "twitter" || ch.service === "x" ? post.caption_short || post.caption : post.caption;
+    const q = `mutation { createPost(input: { text: ${gqlString(text)}, channelId: ${gqlString(ch.id)}, schedulingType: automatic, mode: shareNow, assets: [{ image: { url: ${gqlString(imageUrl)} } }] }) { __typename ... on PostActionSuccess { post { id status dueAt externalLink error { message rawError } } } ... on MutationError { message } } }`;
     try {
       const data = await buffer(env, q);
       const r = data.createPost;
@@ -483,6 +524,9 @@ async function publishPost(env, origin, post, s) {
     } catch (err) {
       results.push({ channel: ch.name, service: ch.service, ok: false, error: err.message });
     }
+  }
+  if (!results.length) {
+    return { status: "failed", error: "No destination is connected. Open Channels in the panel and connect LinkedIn, Instagram or Buffer.", results };
   }
   const okCount = results.filter((r) => r.ok).length;
   const status = okCount === results.length ? "published" : okCount ? "partial" : "failed";
@@ -572,7 +616,7 @@ async function panelState(env, origin) {
     env.DB.prepare("SELECT COUNT(*) AS n FROM posts WHERE status IN ('published','partial')").first(),
   ]);
   return {
-    settings: s,
+    settings: publicSettings(s),
     feeds: feeds.results,
     posts: posts.results.map((r) => rowToPost(r, origin)),
     runs: runs.results,
@@ -582,6 +626,8 @@ async function panelState(env, origin) {
       buffer: Boolean(env.BUFFER_API_KEY),
       github: Boolean(env.GH_TOKEN && env.GH_REPO),
       queue: Boolean(env.QUEUE_URL),
+      linkedin_app: Boolean(env.LINKEDIN_CLIENT_ID && env.LINKEDIN_CLIENT_SECRET),
+      instagram_app: Boolean(env.IG_APP_ID && env.IG_APP_SECRET),
       repo: env.GH_REPO || "",
     },
   };
@@ -636,6 +682,10 @@ async function route(request, env) {
     return json({ ok: true }, 200, { "set-cookie": `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0` });
   }
 
+  // Connect LinkedIn / Instagram (start requires a panel login; callbacks are verified by signed state)
+  m = path.match(/^\/oauth\/(linkedin|instagram)\/(start|callback)$/);
+  if (m && method === "GET") return oauthRoute(request, env, url, m[1], m[2]);
+
   // Pipeline (GitHub Actions)
   if (path.startsWith("/pipeline/")) {
     requirePipeline(request, env);
@@ -650,6 +700,39 @@ async function route(request, env) {
   return new Response("not found", { status: 404 });
 }
 
+function messagePage(title, text, ok) {
+  return html(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>
+<body style="font:16px system-ui;display:grid;place-items:center;min-height:100vh;margin:0;background:#f4f5f7;color:#16181d">
+<div style="background:#fff;border:1px solid #e5e7eb;border-radius:16px;padding:28px;max-width:440px;text-align:center">
+<div style="font-size:40px">${ok ? "&#10003;" : "&#9888;"}</div><h2 style="margin:8px 0">${title}</h2><p style="color:#6b7280">${text}</p>
+<a href="/" style="display:inline-block;margin-top:10px;padding:10px 18px;border-radius:10px;background:#16181d;color:#fff;text-decoration:none">Back to the control panel</a></div></body>`);
+}
+
+async function oauthRoute(request, env, url, provider, step) {
+  const origin = url.origin;
+  const ready = provider === "linkedin" ? env.LINKEDIN_CLIENT_ID && env.LINKEDIN_CLIENT_SECRET : env.IG_APP_ID && env.IG_APP_SECRET;
+  if (!ready) return messagePage("App not set up yet", `The ${provider} app keys are not configured on the server.`, false);
+  if (step === "start") {
+    if (!(await hasSession(request, env))) return Response.redirect(`${origin}/`, 302);
+    const state = await social.makeState(env, provider);
+    const target = provider === "linkedin" ? social.linkedinAuthUrl(env, origin, state) : social.instagramAuthUrl(env, origin, state);
+    return Response.redirect(target, 302);
+  }
+  const code = url.searchParams.get("code");
+  if (!code || !(await social.checkState(env, provider, url.searchParams.get("state")))) {
+    const why = url.searchParams.get("error_description") || url.searchParams.get("error") || "The login link expired. Start again from the panel.";
+    return messagePage("Not connected", why, false);
+  }
+  try {
+    const saved = provider === "linkedin" ? await social.linkedinExchange(env, origin, code) : await social.instagramExchange(env, origin, code);
+    await saveSettings(env, saved);
+    const who = saved.li_name || (saved.ig_username ? `@${saved.ig_username}` : "");
+    return messagePage(`${provider === "linkedin" ? "LinkedIn" : "Instagram"} connected`, `New posts will now go to ${who} automatically.`, true);
+  } catch (err) {
+    return messagePage("Not connected", err.message, false);
+  }
+}
+
 async function pipelineRoute(request, env, path, method, origin) {
   let m;
   if (path === "/pipeline/config" && method === "GET") {
@@ -661,7 +744,7 @@ async function pipelineRoute(request, env, path, method, origin) {
       publishedToday(env, s),
     ]);
     return json({
-      settings: s,
+      settings: publicSettings(s),
       feeds: feeds.results,
       seen: seen.results.map((r) => r.guid),
       recent_title_keys: recent.results.map((r) => r.title_key),
@@ -704,13 +787,14 @@ async function pipelineRoute(request, env, path, method, origin) {
     const status = p.mode === "live" ? (s.approval_mode ? "draft" : "publishing") : "test";
     await env.DB.prepare(
       `INSERT INTO posts (id, created_at, status, source_url, source_name, source_title, headline, highlights, caption, hashtags,
-        image_key, image_prompt, alt_text, category, image_model, text_model, run_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        image_key, image_prompt, alt_text, category, image_model, text_model, run_id, caption_short)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
       .bind(
         p.id, nowIso(), status, p.source_url || null, p.source_name || null, p.source_title || null, p.headline || "",
         JSON.stringify(p.highlights || []), p.caption || "", JSON.stringify(p.hashtags || []), `img:${p.id}`,
         p.image_prompt || null, p.alt_text || null, p.category || null, p.image_model || null, p.text_model || null, p.run_id || null,
+        p.caption_short || null,
       )
       .run();
     if (status !== "publishing") return json({ id: p.id, status, image_url: `${origin}/img/${p.id}.jpg` });
@@ -778,6 +862,16 @@ async function panelRoute(request, env, path, method, origin) {
     return json({ ok: true });
   }
   if (path === "/api/channels/refresh" && method === "POST") return json({ channels: await refreshChannels(env) });
+  if (path === "/api/destinations" && method === "POST") {
+    const b = await body(request);
+    const patch = {};
+    if ("linkedin" in b) patch.publish_linkedin = Boolean(b.linkedin);
+    if ("instagram" in b) patch.publish_instagram = Boolean(b.instagram);
+    if (b.disconnect === "linkedin") Object.assign(patch, { li_token: null, li_expires: null, li_person: null, li_name: null });
+    if (b.disconnect === "instagram") Object.assign(patch, { ig_token: null, ig_expires: null, ig_token_at: null, ig_user_id: null, ig_username: null });
+    await saveSettings(env, patch);
+    return json({ ok: true });
+  }
   if (path === "/api/channels" && method === "POST") {
     const { id, enabled } = await body(request);
     const s = await getSettings(env);

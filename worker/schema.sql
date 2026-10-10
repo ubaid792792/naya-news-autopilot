@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS posts (
   image_model TEXT,
   text_model TEXT,
   run_id TEXT,
+  caption_short TEXT,
   channel_results TEXT,
   error TEXT,
   published_at TEXT

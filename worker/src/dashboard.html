@@ -271,7 +271,13 @@
 
   <section class="panel" id="p-channels">
     <div class="card">
-      <h3>Where posts go</h3>
+      <h3>Direct connections</h3>
+      <p class="help">LinkedIn and Instagram are posted to directly with your own free developer apps. LinkedIn asks you to log in again every 60 days;
+        the panel reminds you a week before. Instagram renews itself.</p>
+      <div id="direct"></div>
+    </div>
+    <div class="card">
+      <h3>Buffer (used for X)</h3>
       <p class="help">Posts are published through your free Buffer account. To add a network, connect it in Buffer first (publish.buffer.com), then press Refresh.</p>
       <div class="row" style="margin-bottom:8px"><button id="chRefresh" class="primary">Refresh from Buffer</button>
         <a class="btn" href="https://publish.buffer.com/channels/connect" target="_blank" rel="noopener">Open Buffer</a></div>
@@ -340,15 +346,19 @@ function render() {
   const chans = (s.buffer_channels || []);
   const on = chans.filter(c => c.enabled);
   $('#stChan').textContent = on.length + ' active';
-  $('#stChanD').textContent = on.map(c => c.service + ': ' + c.name).join(', ') || 'Connect in Buffer, then Refresh';
+  const direct = [s.li_name && s.publish_linkedin ? 'linkedin: ' + s.li_name : '', s.ig_username && s.publish_instagram ? 'instagram: @' + s.ig_username : ''].filter(Boolean);
+  $('#stChan').textContent = (on.length + direct.length) + ' active';
+  $('#stChanD').textContent = direct.concat(on.map(c => c.service + ': ' + c.name)).join(', ') || 'Open Channels to connect';
 
   const notes = [];
+  const liDays = s.li_expires ? Math.round((Date.parse(s.li_expires) - Date.now()) / 86400000) : null;
+  if (liDays !== null && liDays < 7) notes.push('<b>LinkedIn login ' + (liDays < 0 ? 'expired' : 'expires in ' + liDays + ' days') + '.</b> Open Channels and click Reconnect next to LinkedIn.');
   if (!state.config.buffer) notes.push('<b>Buffer key missing.</b> Publishing is disabled until BUFFER_API_KEY is set on the Worker.');
-  else if (!chans.length) notes.push('<b>No channel yet.</b> Connect LinkedIn in Buffer, then open the Channels tab and press "Refresh from Buffer".');
+  else if (!chans.length && !s.li_name && !s.ig_username) notes.push('<b>No destination yet.</b> Open the Channels tab to connect LinkedIn, Instagram or Buffer.');
   if (!state.config.github) notes.push('<b>GitHub not linked.</b> Runs cannot start until GH_TOKEN is set on the Worker.');
   $('#notices').innerHTML = notes.map(n => '<div class="notice">' + n + '</div>').join('');
 
-  renderPosts(); renderFeeds(); renderRuns(); renderChannels(); fillForms(); renderAssets(); renderRefs();
+  renderPosts(); renderFeeds(); renderRuns(); renderChannels(); renderDirect(); fillForms(); renderAssets(); renderRefs();
   const link = s.queue_sheet_link; $('#qSheet').href = link || '#'; $('#qSheet').style.display = link ? '' : 'none';
   if (queueItems === null) loadQueue();
 }
@@ -406,6 +416,22 @@ function renderRuns() {
       '<td>' + pill(r.status) + '</td><td>' + esc(r.summary || '') + '</td>' +
       '<td>' + (r.gh_run_url ? '<a href="' + esc(r.gh_run_url) + '" target="_blank" rel="noopener">GitHub log</a>' : '-') + '</td></tr>';
   }).join('');
+}
+
+function renderDirect() {
+  const s = state.settings, c = state.config;
+  const days = (iso) => iso ? Math.round((Date.parse(iso) - Date.now()) / 86400000) : null;
+  const row = (key, label, connected, who, expires, appReady) => {
+    const d = days(expires);
+    const status = !appReady ? '<span class="pill s-muted">app not set up</span>'
+      : connected ? (d !== null && d < 7 ? '<span class="pill s-warn">expires in ' + d + ' days</span>' : '<span class="pill s-ok">connected</span>')
+      : '<span class="pill s-bad">not connected</span>';
+    return '<div class="chan"><div class="n"><b>' + label + '</b><small>' + esc(who || '') + (connected && d !== null ? ' - login valid ' + d + ' more days' : '') + '</small></div>' + status +
+      (appReady ? '<a class="btn small" href="/oauth/' + key + '/start">' + (connected ? 'Reconnect' : 'Connect ' + label) + '</a>' : '') +
+      (connected ? '<label class="switch"><input type="checkbox" data-dest="' + key + '"' + (s['publish_' + key] ? ' checked' : '') + '><i></i><span>Post here</span></label>' : '') + '</div>';
+  };
+  $('#direct').innerHTML = row('linkedin', 'LinkedIn', !!s.li_name || !!s.li_expires, s.li_name, s.li_expires, c.linkedin_app) +
+    row('instagram', 'Instagram', !!s.ig_username, s.ig_username ? '@' + s.ig_username : '', s.ig_expires, c.instagram_app);
 }
 
 function renderChannels() {
@@ -519,6 +545,10 @@ $('#feeds').addEventListener('click', async (e) => {
   } catch (err) { toast(err.message); }
 });
 
+$('#direct').addEventListener('change', async (e) => {
+  const el = e.target.closest('[data-dest]'); if (!el) return;
+  try { await post('/api/destinations', { [el.dataset.dest]: el.checked }); toast('Saved'); load(); } catch (err) { toast(err.message); }
+});
 $('#chRefresh').onclick = async (e) => {
   e.target.disabled = true;
   try { const r = await post('/api/channels/refresh'); toast(r.channels.length + ' channel(s) found'); load(); } catch (err) { toast(err.message); }
