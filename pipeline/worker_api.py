@@ -54,9 +54,9 @@ class WorkerAPI:
             raise WorkerError(f"image model returned no image: {str(res)[:200]}")
         return base64.b64decode(res["image"])
 
-    def llm(self, system: str, user: str) -> str:
+    def llm(self, system: str, user: str, size: str = "large") -> str:
         res = self._call("POST", "/pipeline/ai/text", timeout=150, retries=1, json={
-            "system": system, "user": user})
+            "system": system, "user": user, "size": size})
         return res.get("text", "")
 
     def upload_image(self, post_id: str, jpeg: bytes) -> str:

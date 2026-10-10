@@ -92,7 +92,7 @@ def select(ai: TextAI, cands: list[Item], count: int, s: dict) -> list[Item]:
         lines.append(f"{n}. [{it.source}, {when}] {it.title} — {it.summary[:220]}")
     try:
         res = ai.json(prompts.SELECT_SYSTEM.format(brand=s["brand_name"], niche=s["niche"]),
-                      prompts.SELECT_USER.format(count=count + 2, items="\n".join(lines)))
+                      prompts.SELECT_USER.format(count=count + 2, items="\n".join(lines)), cheap=True)
         order = [int(n) - 1 for n in res.get("picks", []) if str(n).isdigit() and 0 < int(n) <= len(pool)]
         log.info("selection: %s (%s)", [n + 1 for n in order], res.get("reason", ""))
         ranked = [pool[i] for i in dict.fromkeys(order)]

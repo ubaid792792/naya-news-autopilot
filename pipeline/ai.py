@@ -19,7 +19,13 @@ from .worker_api import WorkerAPI
 log = logging.getLogger("ai")
 
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-DEFAULT_TEXT_MODELS = ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
+# Each Gemini model has its own free daily allowance, so a long chain keeps writing going all day.
+DEFAULT_TEXT_MODELS = [
+    "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-flash-latest",
+    "gemini-3-flash-preview", "gemini-2.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite",
+    "gemini-flash-lite-latest", "gemini-2.5-flash-lite", "gemma-4-31b-it", "gemma-4-26b-a4b-it",
+]
+LITE_TEXT_MODELS = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-flash-lite-latest", "gemini-2.5-flash-lite"]
 IMAGE_MODELS = ["@cf/black-forest-labs/flux-2-klein-4b", "@cf/black-forest-labs/flux-1-schnell"]
 
 
@@ -30,9 +36,16 @@ def parse_json(text: str) -> dict:
         return json.loads(text)
     except json.JSONDecodeError:
         start, end = text.find("{"), text.rfind("}")
-        if start >= 0 and end > start:
-            return json.loads(text[start:end + 1])
-        raise
+        chunk = text[start:end + 1] if start >= 0 and end > start else text
+        try:
+            return json.loads(chunk)
+        except json.JSONDecodeError:
+            # Smaller models sometimes leave trailing commas or unquoted keys; repair instead of failing.
+            from json_repair import repair_json
+            data = repair_json(chunk, return_objects=True)
+            if isinstance(data, dict) and data:
+                return data
+            raise
 
 
 class TextAI:
@@ -44,11 +57,16 @@ class TextAI:
         self.used: list[str] = []
 
     def _gemini(self, model: str, system: str, user: str) -> str:
-        body = {
-            "systemInstruction": {"parts": [{"text": system}]},
-            "contents": [{"role": "user", "parts": [{"text": user}]}],
-            "generationConfig": {"responseMimeType": "application/json", "temperature": 0.6},
-        }
+        if model.startswith("gemma"):
+            # Gemma has no system instruction or JSON mode in the API: fold both into the prompt.
+            body = {"contents": [{"role": "user", "parts": [{"text": f"{system}\n\n{user}\n\nReply with valid JSON only."}]}],
+                    "generationConfig": {"temperature": 0.6}}
+        else:
+            body = {
+                "systemInstruction": {"parts": [{"text": system}]},
+                "contents": [{"role": "user", "parts": [{"text": user}]}],
+                "generationConfig": {"responseMimeType": "application/json", "temperature": 0.6},
+            }
         for attempt in range(2):
             r = requests.post(GEMINI_URL.format(model=model), json=body, timeout=120,
                               headers={"x-goog-api-key": self.key})
@@ -67,10 +85,23 @@ class TextAI:
             return text
         raise RuntimeError(f"{model}: unavailable")
 
-    def json(self, system: str, user: str) -> dict:
+    def _worker(self, system: str, user: str, size: str) -> dict:
+        data = parse_json(self.worker.llm(system, user + "\n\nReturn only valid JSON.", size))
+        self.used.append(f"workers-ai-{size}")
+        return data
+
+    def json(self, system: str, user: str, cheap: bool = False) -> dict:
+        """cheap=True (story picking): small Cloudflare model first, then lite Gemini models, saving the
+        stronger Gemini allowance for writing. Otherwise: Gemini chain, then Cloudflare's large model."""
         errors = []
+        if cheap:
+            try:
+                return self._worker(system, user, "small")
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"workers-ai-small: {exc}")
+        models = LITE_TEXT_MODELS if cheap else self.models
         if self.key:
-            for model in self.models:
+            for model in models:
                 if model in self.exhausted:
                     continue
                 try:
@@ -78,14 +109,13 @@ class TextAI:
                     self.used.append(model)
                     return data
                 except Exception as exc:  # noqa: BLE001 - try the next free model
-                    errors.append(str(exc))
-                    log.warning("text model failed: %s", exc)
-        try:
-            data = parse_json(self.worker.llm(system, user + "\n\nReturn only valid JSON."))
-            self.used.append("workers-ai")
-            return data
-        except Exception as exc:  # noqa: BLE001
-            errors.append(f"workers-ai: {exc}")
+                    errors.append(str(exc)[:200])
+                    log.warning("text model failed: %s", str(exc)[:200])
+        if not cheap:
+            try:
+                return self._worker(system, user, "large")
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"workers-ai-large: {exc}")
         raise RuntimeError("all text models failed: " + " | ".join(errors))
 
 

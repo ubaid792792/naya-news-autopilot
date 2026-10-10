@@ -40,7 +40,11 @@ const DEFAULTS = {
   footer_icons: ["facebook", "instagram", "x", "linkedin", "web"],
   footer_handle: "",
   image_retention_days: 14,
-  text_models: ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-2.5-flash", "gemini-2.5-flash-lite"],
+  text_models: [
+    "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-flash-latest",
+    "gemini-3-flash-preview", "gemini-2.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite",
+    "gemini-flash-lite-latest", "gemini-2.5-flash-lite", "gemma-4-31b-it", "gemma-4-26b-a4b-it",
+  ],
   buffer_channels: [],
   last_dispatch_at: null,
   last_cleanup_date: null,
@@ -49,7 +53,7 @@ const DEFAULTS = {
   custom_refs: [],
 };
 const INTERNAL_KEYS = new Set(["buffer_channels", "last_dispatch_at", "last_cleanup_date", "asset_logo", "asset_frame", "custom_refs"]);
-const TEXT_FALLBACK_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+const TEXT_MODELS = { large: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", small: "@cf/meta/llama-3.1-8b-instruct-fast" };
 const SESSION_COOKIE = "nn_session";
 const SESSION_DAYS = 30;
 
@@ -519,17 +523,24 @@ async function aiImage(env, { prompt, width = 1024, height = 1232, model, refere
   return { image: res.image, model: m };
 }
 
-async function aiText(env, { system, user }) {
-  const res = await env.AI.run(TEXT_FALLBACK_MODEL, {
+async function aiText(env, { system, user, size = "large" }) {
+  const model = TEXT_MODELS[size] || TEXT_MODELS.large;
+  const input = {
     messages: [
       { role: "system", content: system },
       { role: "user", content: user },
     ],
-    max_tokens: 1800,
-    temperature: 0.5,
-  });
+    max_tokens: size === "small" ? 400 : 1800,
+    temperature: 0.4,
+  };
+  let res;
+  try {
+    res = await env.AI.run(model, { ...input, response_format: { type: "json_object" } });
+  } catch {
+    res = await env.AI.run(model, input); // model without JSON mode
+  }
   const text = typeof res.response === "string" ? res.response : JSON.stringify(res.response);
-  return { text, model: TEXT_FALLBACK_MODEL };
+  return { text, model };
 }
 
 // ---------- state for the panel ----------
