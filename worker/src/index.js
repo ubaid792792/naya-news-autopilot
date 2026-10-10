@@ -63,9 +63,12 @@ const DEFAULTS = {
   ig_token_at: null,
   ig_user_id: null,
   ig_username: null,
+  ig_app_secret: null,
+  panel_password_hash: null,
 };
 const INTERNAL_KEYS = new Set(["buffer_channels", "last_dispatch_at", "last_cleanup_date", "asset_logo", "asset_frame", "custom_refs",
-  "li_token", "li_expires", "li_person", "li_name", "ig_token", "ig_expires", "ig_token_at", "ig_user_id", "ig_username"]);
+  "li_token", "li_expires", "li_person", "li_name", "ig_token", "ig_expires", "ig_token_at", "ig_user_id", "ig_username",
+  "ig_app_secret", "panel_password_hash"]);
 // Settings safe to show in the panel or send to the pipeline (no access tokens).
 const publicSettings = (s) => Object.fromEntries(Object.entries(s).filter(([k]) => !social.SECRET_SETTING_KEYS.includes(k)));
 const TEXT_MODELS = { large: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", small: "@cf/meta/llama-3.1-8b-instruct-fast" };
@@ -139,12 +142,38 @@ async function hmac(secret, message) {
   return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-const sessionSecret = (env) => `${env.PIPELINE_SECRET}|${env.DASHBOARD_PASSWORD}`;
+// The panel password can be changed in the panel; it is stored as a salted PBKDF2 hash. Until then
+// the DASHBOARD_PASSWORD secret is used. Changing it signs out every other browser.
+const PBKDF2_ROUNDS = 5000;
+const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 
-async function makeSession(env) {
-  const exp = Date.now() + SESSION_DAYS * 86400000;
-  return `${exp}.${await hmac(sessionSecret(env), `session:${exp}`)}`;
+async function pbkdf2(password, saltHex, rounds) {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
+  const salt = Uint8Array.from(saltHex.match(/../g).map((h) => parseInt(h, 16)));
+  return hex(await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations: rounds }, key, 256));
 }
+
+async function hashPassword(password) {
+  const salt = hex(crypto.getRandomValues(new Uint8Array(16)));
+  return `pbkdf2$${PBKDF2_ROUNDS}$${salt}$${await pbkdf2(password, salt, PBKDF2_ROUNDS)}`;
+}
+
+async function checkPassword(env, s, password) {
+  if (s.panel_password_hash) {
+    const [, rounds, salt, want] = s.panel_password_hash.split("$");
+    return safeEqual(await pbkdf2(String(password || ""), salt, Number(rounds)), want);
+  }
+  return Boolean(env.DASHBOARD_PASSWORD) && safeEqual(password || "", env.DASHBOARD_PASSWORD);
+}
+
+const sessionSecret = (env, s) => `${env.PIPELINE_SECRET}|${s.panel_password_hash || env.DASHBOARD_PASSWORD}`;
+
+async function makeSession(env, s) {
+  const exp = Date.now() + SESSION_DAYS * 86400000;
+  return `${exp}.${await hmac(sessionSecret(env, s), `session:${exp}`)}`;
+}
+
+const sessionCookie = (value) => `${SESSION_COOKIE}=${value}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${SESSION_DAYS * 86400}`;
 
 async function hasSession(request, env) {
   const cookie = request.headers.get("cookie") || "";
@@ -152,7 +181,7 @@ async function hasSession(request, env) {
   if (!match) return false;
   const [exp, sig] = match[1].split(".");
   if (!exp || !sig || Number(exp) < Date.now()) return false;
-  return safeEqual(sig, await hmac(sessionSecret(env), `session:${exp}`));
+  return safeEqual(sig, await hmac(sessionSecret(env, await getSettings(env)), `session:${exp}`));
 }
 
 function requirePipeline(request, env) {
@@ -627,7 +656,8 @@ async function panelState(env, origin) {
       github: Boolean(env.GH_TOKEN && env.GH_REPO),
       queue: Boolean(env.QUEUE_URL),
       linkedin_app: Boolean(env.LINKEDIN_CLIENT_ID && env.LINKEDIN_CLIENT_SECRET),
-      instagram_app: Boolean(env.IG_APP_ID && env.IG_APP_SECRET),
+      instagram_app: Boolean(env.IG_APP_ID && (env.IG_APP_SECRET || s.ig_app_secret)),
+      instagram_app_id: Boolean(env.IG_APP_ID),
       repo: env.GH_REPO || "",
     },
   };
@@ -671,12 +701,12 @@ async function route(request, env) {
   if (path === "/") return html((await hasSession(request, env)) ? DASHBOARD_HTML : LOGIN_HTML);
   if (path === "/api/login" && method === "POST") {
     const { password } = await body(request);
-    if (!env.DASHBOARD_PASSWORD || !safeEqual(password || "", env.DASHBOARD_PASSWORD)) {
+    const s = await getSettings(env);
+    if (!(await checkPassword(env, s, password))) {
       await new Promise((r) => setTimeout(r, 1000));
       throw new HttpError(401, "Wrong password");
     }
-    const cookie = `${SESSION_COOKIE}=${await makeSession(env)}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${SESSION_DAYS * 86400}`;
-    return json({ ok: true }, 200, { "set-cookie": cookie });
+    return json({ ok: true }, 200, { "set-cookie": sessionCookie(await makeSession(env, s)) });
   }
   if (path === "/api/logout" && method === "POST") {
     return json({ ok: true }, 200, { "set-cookie": `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0` });
@@ -708,8 +738,10 @@ function messagePage(title, text, ok) {
 <a href="/" style="display:inline-block;margin-top:10px;padding:10px 18px;border-radius:10px;background:#16181d;color:#fff;text-decoration:none">Back to the control panel</a></div></body>`);
 }
 
-async function oauthRoute(request, env, url, provider, step) {
+async function oauthRoute(request, rawEnv, url, provider, step) {
   const origin = url.origin;
+  const st = await getSettings(rawEnv);
+  const env = { ...rawEnv, IG_APP_SECRET: rawEnv.IG_APP_SECRET || st.ig_app_secret };
   const ready = provider === "linkedin" ? env.LINKEDIN_CLIENT_ID && env.LINKEDIN_CLIENT_SECRET : env.IG_APP_ID && env.IG_APP_SECRET;
   if (!ready) return messagePage("App not set up yet", `The ${provider} app keys are not configured on the server.`, false);
   if (step === "start") {
@@ -725,7 +757,10 @@ async function oauthRoute(request, env, url, provider, step) {
   }
   try {
     const saved = provider === "linkedin" ? await social.linkedinExchange(env, origin, code) : await social.instagramExchange(env, origin, code);
-    await saveSettings(env, saved);
+    // Posting directly now: switch off the same network in Buffer so posts are not doubled.
+    const service = provider === "linkedin" ? "linkedin" : "instagram";
+    saved.buffer_channels = (st.buffer_channels || []).map((c) => (c.service === service ? { ...c, enabled: false } : c));
+    await saveSettings(rawEnv, saved);
     const who = saved.li_name || (saved.ig_username ? `@${saved.ig_username}` : "");
     return messagePage(`${provider === "linkedin" ? "LinkedIn" : "Instagram"} connected`, `New posts will now go to ${who} automatically.`, true);
   } catch (err) {
@@ -862,6 +897,23 @@ async function panelRoute(request, env, path, method, origin) {
     return json({ ok: true });
   }
   if (path === "/api/channels/refresh" && method === "POST") return json({ channels: await refreshChannels(env) });
+  if (path === "/api/password" && method === "POST") {
+    const b = await body(request);
+    const s = await getSettings(env);
+    if (!(await checkPassword(env, s, b.current))) throw new HttpError(400, "Current password is wrong");
+    const next = String(b.new_password || "");
+    if (next.length < 10) throw new HttpError(400, "New password must be at least 10 characters");
+    const panel_password_hash = await hashPassword(next);
+    await saveSettings(env, { panel_password_hash });
+    return json({ ok: true }, 200, { "set-cookie": sessionCookie(await makeSession(env, { ...s, panel_password_hash })) });
+  }
+  if (path === "/api/app-secret" && method === "POST") {
+    const b = await body(request);
+    const secret = String(b.secret || "").trim();
+    if (b.provider !== "instagram" || !/^[a-f0-9]{24,64}$/i.test(secret)) throw new HttpError(400, "That doesn't look like an Instagram app secret (32 letters and numbers).");
+    await saveSettings(env, { ig_app_secret: secret });
+    return json({ ok: true });
+  }
   if (path === "/api/destinations" && method === "POST") {
     const b = await body(request);
     const patch = {};

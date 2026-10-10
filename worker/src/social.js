@@ -3,7 +3,7 @@
 
 const LINKEDIN_VERSION = "202606";
 
-export const SECRET_SETTING_KEYS = ["li_token", "ig_token"];
+export const SECRET_SETTING_KEYS = ["li_token", "ig_token", "ig_app_secret", "panel_password_hash"];
 
 // ---------- OAuth state (signed, short-lived) ----------
 

@@ -125,6 +125,7 @@
     <button data-tab="design">Image design</button>
     <button data-tab="channels">Channels</button>
     <button data-tab="runs">Run history</button>
+    <button data-tab="account">Account</button>
   </nav>
 
   <section class="panel on" id="p-posts">
@@ -272,8 +273,7 @@
   <section class="panel" id="p-channels">
     <div class="card">
       <h3>Direct connections</h3>
-      <p class="help">LinkedIn and Instagram are posted to directly with your own free developer apps. LinkedIn asks you to log in again every 60 days;
-        the panel reminds you a week before. Instagram renews itself.</p>
+      <p class="help">Instagram is posted to directly with your own free Meta app; its login renews itself. LinkedIn and X go through Buffer below.</p>
       <div id="direct"></div>
     </div>
     <div class="card">
@@ -283,6 +283,20 @@
         <a class="btn" href="https://publish.buffer.com/channels/connect" target="_blank" rel="noopener">Open Buffer</a></div>
       <div id="channels"></div>
     </div>
+  </section>
+
+  <section class="panel" id="p-account">
+    <form class="card" id="pwForm">
+      <h3>Control panel password</h3>
+      <p class="help">Change the password used to open this control panel. Other browsers are signed out after a change; this one stays signed in.</p>
+      <div class="grid3">
+        <div class="field"><label>Current password</label><input type="password" id="pwCur" autocomplete="current-password" required></div>
+        <div class="field"><label>New password (10+ characters)</label><input type="password" id="pwNew" autocomplete="new-password" minlength="10" required></div>
+        <div class="field"><label>Repeat new password</label><input type="password" id="pwNew2" autocomplete="new-password" minlength="10" required></div>
+      </div>
+      <div class="row" style="margin-top:12px"><button class="primary" type="submit">Change password</button></div>
+    </form>
+    <div class="card"><h3>Panel address</h3><p class="help">Open this page from any browser or phone:</p><code id="panelUrl"></code></div>
   </section>
 
   <section class="panel" id="p-runs">
@@ -430,8 +444,15 @@ function renderDirect() {
       (appReady ? '<a class="btn small" href="/oauth/' + key + '/start">' + (connected ? 'Reconnect' : 'Connect ' + label) + '</a>' : '') +
       (connected ? '<label class="switch"><input type="checkbox" data-dest="' + key + '"' + (s['publish_' + key] ? ' checked' : '') + '><i></i><span>Post here</span></label>' : '') + '</div>';
   };
-  $('#direct').innerHTML = row('linkedin', 'LinkedIn', !!s.li_name || !!s.li_expires, s.li_name, s.li_expires, c.linkedin_app) +
-    row('instagram', 'Instagram', !!s.ig_username, s.ig_username ? '@' + s.ig_username : '', s.ig_expires, c.instagram_app);
+  const igSecretBox = c.instagram_app_id && !c.instagram_app
+    ? '<div class="row" style="margin:6px 0 4px"><input id="igSecret" type="password" placeholder="Paste the Instagram app secret here" style="flex:1;min-width:220px"><button class="small primary" id="igSecretSave">Save secret</button></div>' : '';
+  $('#direct').innerHTML = (c.linkedin_app ? row('linkedin', 'LinkedIn', !!s.li_name || !!s.li_expires, s.li_name, s.li_expires, c.linkedin_app) : '') +
+    row('instagram', 'Instagram', !!s.ig_username, s.ig_username ? '@' + s.ig_username : '', s.ig_expires, c.instagram_app) + igSecretBox;
+  const save = $('#igSecretSave');
+  if (save) save.onclick = async () => {
+    try { await post('/api/app-secret', { provider: 'instagram', secret: $('#igSecret').value }); toast('Saved. Now click Connect Instagram.'); load(); }
+    catch (err) { toast(err.message, 6000); }
+  };
 }
 
 function renderChannels() {
@@ -590,6 +611,15 @@ $('#queue').addEventListener('click', async (e) => {
   } catch (err) { toast(err.message); }
 });
 $('#tabs').addEventListener('click', (e) => { const b = e.target.closest('button[data-tab="queue"]'); if (b) loadQueue(); });
+
+$('#panelUrl').textContent = location.origin;
+$('#pwForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if ($('#pwNew').value !== $('#pwNew2').value) return toast('The new passwords do not match');
+  try { await post('/api/password', { current: $('#pwCur').value, new_password: $('#pwNew').value });
+    ['#pwCur', '#pwNew', '#pwNew2'].forEach(s => $(s).value = ''); toast('Password changed'); }
+  catch (err) { toast(err.message, 6000); }
+});
 
 $('#refAdd').onclick = async () => {
   const key = $('#refKey').value.trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_');
