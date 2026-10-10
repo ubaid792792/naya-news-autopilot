@@ -61,6 +61,9 @@ class WorkerAPI:
             "system": system, "user": user, "size": size})
         return res.get("text", "")
 
+    def instagram_media(self, username: str) -> list[dict]:
+        return self._call("GET", f"/pipeline/ig-media?username={username}", timeout=60).get("media", [])
+
     def upload_image(self, post_id: str, jpeg: bytes) -> str:
         res = self._call("PUT", f"/pipeline/images/{post_id}", data=jpeg,
                          headers={"Content-Type": "image/jpeg"}, timeout=90)

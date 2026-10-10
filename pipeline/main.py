@@ -17,7 +17,8 @@ from PIL import Image
 
 from . import prompts, references
 from .ai import TextAI, generate_image
-from .feeds import Item, fetch_article_text, fetch_feed, is_due, is_similar, resolve_google_news, title_key
+from .feeds import (Item, fetch_article_text, fetch_feed, instagram_items, is_due, is_similar, resolve_google_news,
+                    title_key, topic_match)
 from .queue_sheet import SheetQueue, to_item
 from .render import render_card
 from .worker_api import WorkerAPI
@@ -77,7 +78,13 @@ def gather_candidates(cfg: dict, worker: WorkerAPI) -> list[Item]:
     for feed in cfg.get("feeds", []):
         if not feed.get("enabled", 1) or not is_due(feed, now):
             continue
-        got, err = fetch_feed(feed)
+        if feed.get("kind") == "instagram":
+            try:
+                got, err = instagram_items(feed, worker.instagram_media(feed["url"].rstrip("/").split("/")[-1].lstrip("@"))), None
+            except Exception as exc:  # noqa: BLE001
+                got, err = [], str(exc)[:200]
+        else:
+            got, err = fetch_feed(feed)
         statuses.append({"id": feed["id"], "error": err, "count": len(got)})
         log.info("feed %s: %d items%s", feed.get("name") or feed["url"], len(got), f" (error: {err})" if err else "")
         items.extend(got)
@@ -87,7 +94,12 @@ def gather_candidates(cfg: dict, worker: WorkerAPI) -> list[Item]:
         log.warning("feed status update failed: %s", exc)
 
     fresh = [i for i in items if i.guid not in seen and (i.published is None or now - i.published <= max_age)]
-    fresh.sort(key=lambda i: i.published or (now - max_age), reverse=True)
+    topics = s.get("priority_topics") or []
+    for i in fresh:
+        i.topic = topic_match(f"{i.title} {i.summary}", topics)
+    # Priority topics first, then the source's priority number (1 = first), then the newest.
+    fresh.sort(key=lambda i: (i.published or (now - max_age)).timestamp(), reverse=True)
+    fresh.sort(key=lambda i: (0 if i.topic else 1, i.priority))
     picked: list[Item] = []
     for it in fresh:
         if is_similar(it.title_key, recent_keys) or is_similar(it.title_key, [p.title_key for p in picked]):
@@ -98,23 +110,37 @@ def gather_candidates(cfg: dict, worker: WorkerAPI) -> list[Item]:
 
 
 def select(ai: TextAI, cands: list[Item], count: int, s: dict) -> list[Item]:
+    """Let the AI pick the best stories; candidates arrive already ordered by topic, source priority
+    and freshness, and the AI is told to respect that order and the user's priority topics."""
+    topics = [t for t in (s.get("priority_topics") or []) if t.strip()]
+    only = s.get("topic_mode") == "only" and topics
     pool = cands[:25]
-    if len(pool) <= count:
-        return pool
-    lines = []
-    for n, it in enumerate(pool, 1):
-        when = it.published.strftime("%Y-%m-%d %H:%M UTC") if it.published else "unknown time"
-        lines.append(f"{n}. [{it.source}, {when}] {it.title} — {it.summary[:220]}")
-    try:
-        res = ai.json(prompts.SELECT_SYSTEM.format(brand=s["brand_name"], niche=s["niche"]),
-                      prompts.SELECT_USER.format(count=count + 2, items="\n".join(lines)), cheap=True)
-        order = [int(n) - 1 for n in res.get("picks", []) if str(n).isdigit() and 0 < int(n) <= len(pool)]
-        log.info("selection: %s (%s)", [n + 1 for n in order], res.get("reason", ""))
-        ranked = [pool[i] for i in dict.fromkeys(order)]
-        return ranked + [p for p in pool if p not in ranked]
-    except Exception as exc:  # noqa: BLE001
-        log.warning("selection failed, using newest first: %s", exc)
-        return pool
+    if len(pool) > count:
+        lines = []
+        for n, it in enumerate(pool, 1):
+            when = it.published.strftime("%Y-%m-%d %H:%M UTC") if it.published else "unknown time"
+            lines.append(f"{n}. [source priority {it.priority}, {it.source}, {when}] {it.title} — {it.summary[:200]}")
+        try:
+            res = ai.json(prompts.SELECT_SYSTEM.format(brand=s["brand_name"], niche=s["niche"],
+                                                       topics=prompts.topics_text(topics, only)),
+                          prompts.SELECT_USER.format(count=count + 2, items="\n".join(lines)), cheap=True)
+            order, labels = [], {}
+            for p in res.get("picks", []):
+                n, t = (p.get("n"), p.get("topic") or "") if isinstance(p, dict) else (p, "")
+                if str(n).isdigit() and 0 < int(n) <= len(pool):
+                    order.append(int(n) - 1)
+                    if t and t.lower() in {x.lower() for x in topics}:
+                        labels[int(n) - 1] = t
+            for i, t in labels.items():
+                pool[i].topic = pool[i].topic or t
+            log.info("selection: %s (%s)", [n + 1 for n in order], str(res.get("reason", ""))[:160])
+            ranked = [pool[i] for i in dict.fromkeys(order)]
+            pool = ranked + [p for p in pool if p not in ranked]
+        except Exception as exc:  # noqa: BLE001
+            log.warning("selection failed, keeping topic/priority/newest order: %s", exc)
+    if only:
+        pool = [p for p in pool if p.topic]
+    return pool
 
 
 class NotEnoughText(Exception):
@@ -135,6 +161,7 @@ def write_post(ai: TextAI, item: Item, s: dict, custom_refs: list[dict] | None =
         hashtag_count=s.get("hashtag_count", 9), image_style=s.get("image_style", ""),
         people_rule=prompts.PEOPLE_RULES.get(s.get("people_in_images", "none"), prompts.PEOPLE_RULES["none"]),
         reference_catalogue=references.catalogue(custom_refs),
+        house_rules=prompts.rules_text(s.get("style_rules") or []),
         fixed_tags=(" Always include: " + " ".join(fixed) + ".") if fixed else "")
     user = prompts.WRITE_USER.format(
         source=item.source, title=item.title, link=item.link,
@@ -221,16 +248,28 @@ def collect(ctx: dict, queue: SheetQueue) -> str:
     return msg
 
 
-def queue_order(rows: list[dict], order: str) -> list[dict]:
-    if order != "freshest":
+def queue_order(rows: list[dict], order: str, topics: list[str] | None = None, only: bool = False) -> list[dict]:
+    """priority: priority topics first, then source priority number (1 = first), then newest.
+    freshest: newest first. top: the sheet's own row order."""
+    for r in rows:
+        r["topic"] = r.get("topic") or topic_match(f"{r.get('title', '')} {r.get('summary', '')}", topics or [])
+    if only:
+        rows = [r for r in rows if r["topic"]]
+    if order == "top":
         return rows
-    return sorted(rows, key=lambda r: r.get("published") or r.get("added") or "", reverse=True)
+    rows = sorted(rows, key=lambda r: r.get("published") or r.get("added") or "", reverse=True)
+    if order == "priority":
+        rows.sort(key=lambda r: (0 if r["topic"] else 1, int(r.get("priority") or 5)))
+    return rows
 
 
 def publish_from_queue(ctx: dict, queue: SheetQueue, count: int) -> list[dict]:
     """Post the next stories from the queue; posted (or unusable) rows move to the Posted tab."""
     created, attempts = [], 0
-    for row in queue_order(queue.list(100), ctx["s"].get("queue_order", "freshest")):
+    s = ctx["s"]
+    topics = [t for t in (s.get("priority_topics") or []) if t.strip()]
+    for row in queue_order(queue.list(100), s.get("queue_order", "priority"), topics,
+                           bool(topics) and s.get("topic_mode") == "only"):
         if len(created) >= count or attempts >= count + 3:
             break
         attempts += 1

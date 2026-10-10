@@ -39,7 +39,8 @@ class SheetQueue:
 
     def append(self, items: list[Item]) -> int:
         payload = [{"title": i.title, "source": i.source, "link": i.link, "category": i.category,
-                    "summary": i.summary, "published": i.published.isoformat() if i.published else ""} for i in items]
+                    "summary": i.summary, "published": i.published.isoformat() if i.published else "",
+                    "priority": i.priority, "topic": i.topic} for i in items]
         return self._post({"action": "append", "items": payload}, "added")["added"] if payload else 0
 
     def remove(self, link: str, result: str = "", image: str = "", title: str = "", source: str = "") -> int:
@@ -61,4 +62,4 @@ def to_item(row: dict) -> Item:
                 pass
     return Item(guid=row["link"], title=row.get("title") or row["link"], link=row["link"],
                 summary=row.get("summary", ""), source=row.get("source") or "", published=published,
-                category=row.get("category", ""))
+                category=row.get("category", ""), priority=int(row.get("priority") or 5), topic=row.get("topic") or "")

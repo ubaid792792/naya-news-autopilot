@@ -123,6 +123,7 @@
     <button data-tab="feeds">News sources</button>
     <button data-tab="schedule">Schedule</button>
     <button data-tab="content">Writing</button>
+    <button data-tab="rules">Topics &amp; rules</button>
     <button data-tab="design">Image design</button>
     <button data-tab="channels">Channels</button>
     <button data-tab="runs">Run history</button>
@@ -155,17 +156,20 @@
       <h3>Add a news source</h3>
       <p class="help">Paste any of these. The system finds the news feed by itself:<br>
         <b>Website</b> (dawn.com, propakistani.pk) &middot; <b>RSS link</b> &middot; <b>YouTube channel</b> &middot;
-        <b>Telegram channel</b> (t.me/name) &middot; <b>Bluesky profile</b> &middot; <b>Topic words</b> (e.g. "Pakistan startups", "SECP", "site:brecorder.com").<br>
-        X, LinkedIn, Facebook and Instagram accounts can't be read for free; add the same outlet's website instead.</p>
+        <b>Telegram channel</b> (t.me/name) &middot; <b>Bluesky profile</b> &middot; <b>Pinterest profile or board</b> &middot;
+        <b>Instagram Business/Creator profile</b> (needs Channels &gt; Instagram reading) &middot; <b>Topic words</b> (e.g. "Pakistan startups", "site:brecorder.com").<br>
+        X, LinkedIn and Facebook accounts can't be read for free; add the same outlet's website instead.<br>
+        <b>Priority</b>: 1 = this source's stories are collected and posted first; higher numbers come later.</p>
       <div class="grid2">
         <div class="field" style="grid-column:1/-1"><label>Source</label><input id="fUrl" placeholder="dawn.com  or  https://t.me/channel  or  Pakistan fintech"></div>
         <div class="field"><label>Name (optional)</label><input id="fName" placeholder="Dawn"></div>
         <div class="field"><label>Category (optional)</label><input id="fCat" placeholder="Business"></div>
         <div class="field"><label>Check this source</label><select id="fInt" data-intervals></select></div>
+        <div class="field"><label>Priority (1 = first)</label><input id="fPri" type="number" min="1" max="99" value="5"></div>
       </div>
       <div class="row" style="margin-top:12px"><button id="fAdd" class="primary">Add source</button></div>
     </div>
-    <div class="card tablewrap"><table><thead><tr><th>On</th><th>Source</th><th>Category</th><th>Check</th><th>Last check</th><th>Items</th><th></th></tr></thead><tbody id="feeds"></tbody></table></div>
+    <div class="card tablewrap"><table><thead><tr><th>On</th><th>Priority</th><th>Source</th><th>Category</th><th>Check</th><th>Last check</th><th>Items</th><th></th></tr></thead><tbody id="feeds"></tbody></table></div>
   </section>
 
   <section class="panel" id="p-schedule">
@@ -195,7 +199,7 @@
         <div class="field"><label>Max stories in queue</label><input name="queue_max_items" type="number" min="5" max="200"></div>
         <div class="field"><label>Remove queued stories older than (hours)</label><input name="queue_max_age_hours" type="number" min="1" max="168"></div>
         <div class="field"><label>Which story to post next</label><select name="queue_order">
-          <option value="freshest">Freshest story first</option><option value="top">Top row of the sheet first</option></select></div>
+          <option value="priority">Priority topics, then source priority, then newest</option><option value="freshest">Freshest story first</option><option value="top">Top row of the sheet first</option></select></div>
         <div class="field" style="grid-column:span 2"><label>Google Sheet link (for the "Open" button)</label><input name="queue_sheet_link" placeholder="https://docs.google.com/spreadsheets/d/..."></div>
       </div>
       <div style="margin-top:14px"><label class="switch"><input type="checkbox" name="approval_mode"><i></i>
@@ -222,6 +226,26 @@
       </div>
       <div class="row" style="margin-top:14px"><button class="primary" type="submit">Save writing style</button></div>
     </form>
+  </section>
+
+  <section class="panel" id="p-rules">
+    <form class="card" data-form>
+      <h3>Priority topics</h3>
+      <p class="help">Stories about these topics are picked and posted first. One topic per line or separated by commas (e.g. startups, fintech, IMF, cricket).</p>
+      <div class="grid2">
+        <div class="field" style="grid-column:1/-1"><label>Topics</label><textarea name="priority_topics" placeholder="startups&#10;fintech&#10;IMF"></textarea></div>
+        <div class="field"><label>How to use them</label><select name="topic_mode">
+          <option value="prefer">Post these topics first, then other news</option>
+          <option value="only">Only post news about these topics</option></select></div>
+      </div>
+      <div class="row" style="margin-top:12px"><button class="primary" type="submit">Save topics</button></div>
+    </form>
+    <div class="card">
+      <h3>Writing rules</h3>
+      <p class="help">Rules the AI always follows when writing posts and headlines. Add or delete any time; changes apply from the next post.</p>
+      <div id="rulesList"></div>
+      <div class="row" style="margin-top:10px"><input id="ruleNew" placeholder="e.g. Write Prime Minister instead of PM" style="flex:1;min-width:240px"><button id="ruleAdd" class="primary">Add rule</button></div>
+    </div>
   </section>
 
   <section class="panel" id="p-design">
@@ -380,7 +404,7 @@ function render() {
   if (!state.config.github) notes.push('<b>GitHub not linked.</b> Runs cannot start until GH_TOKEN is set on the Worker.');
   $('#notices').innerHTML = notes.map(n => '<div class="notice">' + n + '</div>').join('');
 
-  renderPosts(); renderFeeds(); renderRuns(); renderChannels(); renderDirect(); fillForms(); renderAssets(); renderRefs();
+  renderPosts(); renderFeeds(); renderRuns(); renderChannels(); renderDirect(); fillForms(); renderAssets(); renderRefs(); renderRules();
   const link = s.queue_sheet_link; $('#qSheet').href = link || '#'; $('#qSheet').style.display = link ? '' : 'none';
   if (queueItems === null) loadQueue();
 }
@@ -412,13 +436,14 @@ function renderPosts() {
 const INTERVALS = [[0, 'Every run'], [30, 'Every 30 min'], [60, 'Every hour'], [120, 'Every 2 hours'], [180, 'Every 3 hours'],
   [360, 'Every 6 hours'], [720, 'Every 12 hours'], [1440, 'Once a day']];
 const intervalOptions = (v) => INTERVALS.map(([m, l]) => '<option value="' + m + '"' + (Number(v || 0) === m ? ' selected' : '') + '>' + l + '</option>').join('');
-const KIND = { rss: 'RSS', topic: 'Google News', telegram: 'Telegram', youtube: 'YouTube' };
+const KIND = { rss: 'RSS', topic: 'Google News', telegram: 'Telegram', youtube: 'YouTube', instagram: 'Instagram' };
 
 function renderFeeds() {
   const el = $('#feeds');
-  if (!state.feeds.length) { el.innerHTML = '<tr><td colspan="7" class="empty">No sources yet.</td></tr>'; return; }
+  if (!state.feeds.length) { el.innerHTML = '<tr><td colspan="8" class="empty">No sources yet.</td></tr>'; return; }
   el.innerHTML = state.feeds.map(f => '<tr data-id="' + f.id + '">' +
     '<td><label class="switch"><input type="checkbox" data-act="feedToggle"' + (f.enabled ? ' checked' : '') + '><i></i></label></td>' +
+    '<td><input type="number" min="1" max="99" value="' + (f.priority ?? 5) + '" data-act="feedPri" style="width:64px"></td>' +
     '<td><b>' + esc(f.name || '(no name)') + '</b> <span class="pill s-muted" style="font-size:11px">' + esc(KIND[f.kind] || 'RSS') + '</span>' +
       '<div class="url" style="max-width:380px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><a href="' + esc(f.url) + '" target="_blank" rel="noopener" style="color:var(--muted)">' + esc(f.url) + '</a></div>' +
       (f.last_error ? '<div style="color:var(--bad);font-size:12px">' + esc(f.last_error) + '</div>' : '') + '</td>' +
@@ -454,8 +479,19 @@ function renderDirect() {
   };
   const igSecretBox = c.instagram_app_id && !c.instagram_app
     ? '<div class="row" style="margin:6px 0 4px"><input id="igSecret" type="password" placeholder="Paste the Instagram app secret here" style="flex:1;min-width:220px"><button class="small primary" id="igSecretSave">Save secret</button></div>' : '';
+  const rd = c.ig_reading;
+  const readingRow = c.facebook_app_id ? '<div class="chan"><div class="n"><b>Instagram reading</b><small>' +
+    (rd ? 'Reads public Business/Creator accounts via @' + esc(rd.username) + ' (' + esc(rd.page) + ')' : 'Lets you add Instagram profiles as news sources') + '</small></div>' +
+    (rd ? '<span class="pill s-ok">connected</span>' : '<span class="pill s-muted">not connected</span>') +
+    (c.facebook_app ? '<a class="btn small" href="/oauth/facebook/start">' + (rd ? 'Reconnect' : 'Connect Facebook') + '</a>' : '') + '</div>' +
+    (!c.facebook_app ? '<div class="row" style="margin:6px 0 4px"><input id="fbSecret" type="password" placeholder="Paste the Facebook app secret here" style="flex:1;min-width:220px"><button class="small primary" id="fbSecretSave">Save secret</button></div>' : '') : '';
   $('#direct').innerHTML = (c.linkedin_app ? row('linkedin', 'LinkedIn', !!s.li_name || !!s.li_expires, s.li_name, s.li_expires, c.linkedin_app) : '') +
-    row('instagram', 'Instagram', !!s.ig_username, s.ig_username ? '@' + s.ig_username : '', s.ig_expires, c.instagram_app) + igSecretBox;
+    row('instagram', 'Instagram', !!s.ig_username, s.ig_username ? '@' + s.ig_username : '', s.ig_expires, c.instagram_app) + igSecretBox + readingRow;
+  const fbSave = $('#fbSecretSave');
+  if (fbSave) fbSave.onclick = async () => {
+    try { await post('/api/app-secret', { provider: 'facebook', secret: $('#fbSecret').value }); toast('Saved. Now click Connect Facebook.'); load(); }
+    catch (err) { toast(err.message, 6000); }
+  };
   const save = $('#igSecretSave');
   if (save) save.onclick = async () => {
     try { await post('/api/app-secret', { provider: 'instagram', secret: $('#igSecret').value }); toast('Saved. Now click Connect Instagram.'); load(); }
@@ -487,7 +523,7 @@ function fillForms() {
   $$('form[data-form] [name]').forEach(el => {
     const v = s[el.name];
     if (el.type === 'checkbox') el.checked = !!v;
-    else el.value = Array.isArray(v) ? v.join(', ') : (v ?? '');
+    else el.value = Array.isArray(v) ? v.join(el.name === 'priority_topics' ? '\n' : ', ') : (v ?? '');
   });
   $$('[data-icon]').forEach(el => el.checked = (s.footer_icons || []).includes(el.dataset.icon));
 }
@@ -500,6 +536,12 @@ async function loadQueue() {
     '<a href="' + esc(q.link) + '" target="_blank" rel="noopener" style="color:var(--muted)">' + esc(q.link) + '</a></div></td><td>' + esc(q.source) + '</td>' +
     '<td>' + ago(q.published || q.added) + '</td><td><div class="row"><button class="small go" data-act="qPost">Post now</button><button class="small" data-act="qDel">Remove</button></div></td></tr>').join('')
     : '<tr><td colspan="4" class="empty">Queue is empty. Press "Collect news now".</td></tr>';
+}
+
+function renderRules() {
+  const rules = state.settings.style_rules || [];
+  $('#rulesList').innerHTML = rules.length ? rules.map((r, i) => '<div class="chan" data-i="' + i + '"><div class="n">' + (i + 1) + '. ' + esc(r) + '</div>' +
+    '<button class="small" data-act="ruleDel">Delete</button></div>').join('') : '<div class="empty" style="padding:12px">No rules yet.</div>';
 }
 
 function renderRefs() {
@@ -560,14 +602,15 @@ $('#posts').addEventListener('click', async (e) => {
 $('#fInt').innerHTML = intervalOptions(0);
 $('#fAdd').onclick = async (e) => {
   e.target.disabled = true;
-  try { const r = await post('/api/feeds', { url: $('#fUrl').value, name: $('#fName').value, category: $('#fCat').value, interval_minutes: $('#fInt').value });
+  try { const r = await post('/api/feeds', { url: $('#fUrl').value, name: $('#fName').value, category: $('#fCat').value, interval_minutes: $('#fInt').value, priority: $('#fPri').value });
     $('#fUrl').value = $('#fName').value = $('#fCat').value = ''; toast('Added: ' + (r.name || r.url) + ' (' + (KIND[r.kind] || r.kind) + ')', 5000); load(); }
   catch (err) { toast(err.message, 9000); }
   e.target.disabled = false;
 };
 $('#feeds').addEventListener('change', async (e) => {
-  const el = e.target.closest('[data-act="feedInt"]'); if (!el) return;
-  try { await api('/api/feeds/' + el.closest('tr').dataset.id, { method: 'PATCH', body: JSON.stringify({ interval_minutes: Number(el.value) }) }); toast('Saved'); }
+  const el = e.target.closest('[data-act="feedInt"],[data-act="feedPri"]'); if (!el) return;
+  const field = el.dataset.act === 'feedPri' ? { priority: Number(el.value) } : { interval_minutes: Number(el.value) };
+  try { await api('/api/feeds/' + el.closest('tr').dataset.id, { method: 'PATCH', body: JSON.stringify(field) }); toast('Saved'); }
   catch (err) { toast(err.message); }
 });
 $('#feeds').addEventListener('click', async (e) => {
@@ -626,6 +669,17 @@ $('#queue').addEventListener('click', async (e) => {
 $('#tabs').addEventListener('click', (e) => { const b = e.target.closest('button[data-tab="queue"]'); if (b) loadQueue(); });
 
 $('#panelUrl').textContent = location.origin;
+async function saveRules(rules) { await post('/api/settings', { style_rules: rules }); load(); }
+$('#ruleAdd').onclick = async () => {
+  const r = $('#ruleNew').value.trim(); if (!r) return toast('Type a rule first');
+  try { await saveRules([...(state.settings.style_rules || []), r]); $('#ruleNew').value = ''; toast('Rule added'); } catch (e) { toast(e.message); }
+};
+$('#rulesList').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-act="ruleDel"]'); if (!b) return;
+  const i = Number(b.closest('[data-i]').dataset.i);
+  if (!confirm('Delete this rule?')) return;
+  try { await saveRules((state.settings.style_rules || []).filter((_, j) => j !== i)); toast('Rule deleted'); } catch (err) { toast(err.message); }
+});
 $('#pwForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   if ($('#pwNew').value !== $('#pwNew2').value) return toast('The new passwords do not match');

@@ -36,7 +36,10 @@ const DEFAULTS = {
   stories_per_collection: 3,
   queue_max_items: 30,
   queue_max_age_hours: 24,
-  queue_order: "freshest",
+  queue_order: "priority",
+  priority_topics: [],
+  topic_mode: "prefer",
+  style_rules: ["Pakistani currency (Pakistani Rupees, Rs) is always written as PKR, for example PKR 285,000 or PKR 14 per kg."],
   queue_sheet_link: "",
   image_enhance: "normal",
   accent_color: "#FFC72C",
@@ -67,10 +70,15 @@ const DEFAULTS = {
   ig_username: null,
   ig_app_secret: null,
   panel_password_hash: null,
+  fb_app_secret: null,
+  fb_token: null,
+  fb_ig_id: null,
+  fb_ig_username: null,
+  fb_page_name: null,
 };
 const INTERNAL_KEYS = new Set(["buffer_channels", "last_dispatch_at", "last_cleanup_date", "asset_logo", "asset_frame", "custom_refs",
   "li_token", "li_expires", "li_person", "li_name", "ig_token", "ig_expires", "ig_token_at", "ig_user_id", "ig_username",
-  "ig_app_secret", "panel_password_hash"]);
+  "ig_app_secret", "panel_password_hash", "fb_app_secret", "fb_token", "fb_ig_id", "fb_ig_username", "fb_page_name"]);
 // Settings safe to show in the panel or send to the pipeline (no access tokens).
 const publicSettings = (s) => Object.fromEntries(Object.entries(s).filter(([k]) => !social.SECRET_SETTING_KEYS.includes(k)));
 const TEXT_MODELS = { large: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", small: "@cf/meta/llama-3.1-8b-instruct-fast" };
@@ -223,7 +231,10 @@ function cleanSettingsPatch(patch) {
       if (!Number.isFinite(n)) throw new HttpError(400, `${k} must be a number`);
       out[k] = n;
     } else if (typeof def === "boolean") out[k] = Boolean(v);
-    else if (Array.isArray(def)) out[k] = Array.isArray(v) ? v.map(String).filter(Boolean) : String(v).split(/[\s,]+/).filter(Boolean);
+    else if (Array.isArray(def)) {
+      const sep = k === "priority_topics" || k === "style_rules" ? /\s*[\n,]\s*/ : /[\s,]+/;
+      out[k] = (Array.isArray(v) ? v.map(String) : String(v).split(k === "style_rules" ? /\n/ : sep)).map((x) => x.trim()).filter(Boolean);
+    }
     else out[k] = String(v ?? "");
   }
   if ("interval_minutes" in out && out.interval_minutes < 5) throw new HttpError(400, "interval must be at least 5 minutes");
@@ -232,7 +243,8 @@ function cleanSettingsPatch(patch) {
   for (const k of ["active_start_hour", "active_end_hour", "day_start_hour"]) if (k in out) out[k] = Math.max(0, Math.min(24, Math.round(out[k])));
   if ("accent_color" in out && !/^#[0-9a-fA-F]{6}$/.test(out.accent_color)) throw new HttpError(400, "accent colour must look like #FFC72C");
   if ("source_credit" in out && !["none", "name", "link"].includes(out.source_credit)) throw new HttpError(400, "bad source_credit");
-  if ("queue_order" in out && !["freshest", "top"].includes(out.queue_order)) throw new HttpError(400, "bad queue_order");
+  if ("queue_order" in out && !["priority", "freshest", "top"].includes(out.queue_order)) throw new HttpError(400, "bad queue_order");
+  if ("topic_mode" in out && !["prefer", "only"].includes(out.topic_mode)) throw new HttpError(400, "bad topic_mode");
   if ("stories_per_collection" in out) out.stories_per_collection = Math.max(1, Math.min(10, Math.round(out.stories_per_collection)));
   if ("queue_max_items" in out) out.queue_max_items = Math.max(5, Math.min(200, Math.round(out.queue_max_items)));
   if ("image_enhance" in out && !["off", "normal", "strong"].includes(out.image_enhance)) throw new HttpError(400, "bad image_enhance");
@@ -403,7 +415,7 @@ async function dailyCleanup(env, s) {
 const SOURCE_UA = "Mozilla/5.0 (compatible; NayaNewsAutopilot/1.0; +https://github.com)";
 const BLOCKED_SOCIAL = {
   "x.com": "X (Twitter)", "twitter.com": "X (Twitter)", "linkedin.com": "LinkedIn", "facebook.com": "Facebook",
-  "fb.com": "Facebook", "instagram.com": "Instagram", "threads.net": "Threads", "tiktok.com": "TikTok",
+  "fb.com": "Facebook", "threads.net": "Threads", "tiktok.com": "TikTok",
 };
 const googleNews = (q) => `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=en-PK&gl=PK&ceid=PK:en`;
 
@@ -434,6 +446,19 @@ async function resolveSource(raw) {
     const name = u.pathname.split("/").filter(Boolean).filter((p) => p !== "s")[0];
     if (!name) throw new HttpError(400, "Use a public channel link like https://t.me/channelname");
     return { url: `https://t.me/s/${name}`, kind: "telegram", name: `Telegram: ${name}` };
+  }
+  if (host === "pinterest.com" || /^([a-z]{2}\.)?pinterest\.[a-z.]+$/.test(host)) {
+    // Public Pinterest profiles and boards have free RSS feeds.
+    const parts = u.pathname.split("/").filter(Boolean);
+    if (!parts.length || parts[0] === "pin") throw new HttpError(400, "Use a Pinterest profile or board link, like pinterest.com/name/ or pinterest.com/name/board/");
+    const feed = parts.length >= 2 ? `https://www.pinterest.com/${parts[0]}/${parts[1]}.rss` : `https://www.pinterest.com/${parts[0]}/feed.rss`;
+    return { url: feed, kind: "rss", name: `Pinterest: ${parts.slice(0, 2).join("/")}` };
+  }
+  if (host === "instagram.com") {
+    // Public Business/Creator accounts are read through Meta Business Discovery (Channels > Instagram reading).
+    const name = u.pathname.split("/").filter(Boolean)[0];
+    if (!name || ["p", "reel", "reels", "stories", "explore"].includes(name)) throw new HttpError(400, "Use an Instagram profile link, like instagram.com/dawn.today");
+    return { url: `https://www.instagram.com/${name}/`, kind: "instagram", name: `Instagram @${name}` };
   }
   if (host === "bsky.app") {
     const m = u.pathname.match(/^\/profile\/([^/]+)/);
@@ -631,7 +656,7 @@ function rowToPost(r, origin) {
 async function panelState(env, origin) {
   const s = await getSettings(env);
   const [feeds, posts, runs, today, total] = await Promise.all([
-    env.DB.prepare("SELECT * FROM feeds ORDER BY id").all(),
+    env.DB.prepare("SELECT * FROM feeds ORDER BY priority, id").all(),
     env.DB.prepare("SELECT * FROM posts ORDER BY created_at DESC LIMIT 40").all(),
     env.DB.prepare("SELECT id, started_at, finished_at, mode, trigger, status, summary, gh_run_url FROM runs ORDER BY started_at DESC LIMIT 25").all(),
     publishedToday(env, s),
@@ -656,6 +681,9 @@ async function panelState(env, origin) {
       linkedin_app: Boolean(env.LINKEDIN_CLIENT_ID && env.LINKEDIN_CLIENT_SECRET),
       instagram_app: Boolean(env.IG_APP_ID && (env.IG_APP_SECRET || s.ig_app_secret)),
       instagram_app_id: Boolean(env.IG_APP_ID),
+      facebook_app: Boolean(env.FB_APP_ID && s.fb_app_secret),
+      facebook_app_id: Boolean(env.FB_APP_ID),
+      ig_reading: s.fb_ig_username ? { username: s.fb_ig_username, page: s.fb_page_name } : null,
       repo: env.GH_REPO || "",
     },
   };
@@ -711,7 +739,7 @@ async function route(request, env) {
   }
 
   // Connect LinkedIn / Instagram (start requires a panel login; callbacks are verified by signed state)
-  m = path.match(/^\/oauth\/(linkedin|instagram)\/(start|callback)$/);
+  m = path.match(/^\/oauth\/(linkedin|instagram|facebook)\/(start|callback)$/);
   if (m && method === "GET") return oauthRoute(request, env, url, m[1], m[2]);
 
   // Pipeline (GitHub Actions)
@@ -739,7 +767,8 @@ function messagePage(title, text, ok) {
 async function oauthRoute(request, rawEnv, url, provider, step) {
   const origin = url.origin;
   const st = await getSettings(rawEnv);
-  const env = { ...rawEnv, IG_APP_SECRET: rawEnv.IG_APP_SECRET || st.ig_app_secret };
+  const env = { ...rawEnv, IG_APP_SECRET: rawEnv.IG_APP_SECRET || st.ig_app_secret, FB_APP_SECRET: st.fb_app_secret };
+  if (provider === "facebook") return facebookOauth(request, env, url, step, st);
   const ready = provider === "linkedin" ? env.LINKEDIN_CLIENT_ID && env.LINKEDIN_CLIENT_SECRET : env.IG_APP_ID && env.IG_APP_SECRET;
   if (!ready) return messagePage("App not set up yet", `The ${provider} app keys are not configured on the server.`, false);
   if (step === "start") {
@@ -766,12 +795,47 @@ async function oauthRoute(request, rawEnv, url, provider, step) {
   }
 }
 
+// Instagram reading: Facebook Login gives a token for the Facebook Page linked to @nayanews2026, which
+// lets Meta Business Discovery read other public Business/Creator accounts' latest posts.
+async function facebookOauth(request, env, url, step, st) {
+  const origin = url.origin;
+  if (!env.FB_APP_ID || !env.FB_APP_SECRET) return messagePage("Not set up yet", "Save the Facebook app secret in Channels first.", false);
+  const redirect = `${origin}/oauth/facebook/callback`;
+  if (step === "start") {
+    if (!(await hasSession(request, env))) return Response.redirect(`${origin}/`, 302);
+    const q = new URLSearchParams({
+      client_id: env.FB_APP_ID, redirect_uri: redirect, state: await social.makeState(env, "facebook"), response_type: "code",
+      scope: "instagram_basic,pages_show_list,pages_read_engagement,business_management",
+    });
+    return Response.redirect(`https://www.facebook.com/dialog/oauth?${q}`, 302);
+  }
+  const code = url.searchParams.get("code");
+  if (!code || !(await social.checkState(env, "facebook", url.searchParams.get("state")))) {
+    return messagePage("Not connected", url.searchParams.get("error_description") || "The login link expired. Start again from the panel.", false);
+  }
+  const g = (path, params) => fetch(`https://graph.facebook.com/${path}?${new URLSearchParams(params)}`).then((r) => r.json());
+  const short = await g("oauth/access_token", { client_id: env.FB_APP_ID, client_secret: env.FB_APP_SECRET, redirect_uri: redirect, code });
+  if (!short.access_token) return messagePage("Not connected", JSON.stringify(short.error || short).slice(0, 200), false);
+  const long = await g("oauth/access_token", { grant_type: "fb_exchange_token", client_id: env.FB_APP_ID, client_secret: env.FB_APP_SECRET, fb_exchange_token: short.access_token });
+  const user = long.access_token || short.access_token;
+  const pages = await g("me/accounts", { fields: "name,access_token,instagram_business_account{id,username}", access_token: user });
+  const page = (pages.data || []).find((p) => p.instagram_business_account);
+  if (!page) {
+    return messagePage("No linked Instagram found", "None of your Facebook Pages has an Instagram professional account linked. Link @nayanews2026 to the Naya News Facebook Page, then try again.", false);
+  }
+  await saveSettings(env, {
+    fb_token: page.access_token, fb_ig_id: page.instagram_business_account.id,
+    fb_ig_username: page.instagram_business_account.username, fb_page_name: page.name,
+  });
+  return messagePage("Instagram reading connected", `Public Business/Creator Instagram accounts can now be added as news sources (via @${page.instagram_business_account.username}).`, true);
+}
+
 async function pipelineRoute(request, env, path, method, origin) {
   let m;
   if (path === "/pipeline/config" && method === "GET") {
     const s = await getSettings(env);
     const [feeds, seen, recent, today] = await Promise.all([
-      env.DB.prepare("SELECT id, url, name, category, enabled, kind, interval_minutes, last_fetched_at FROM feeds WHERE enabled = 1").all(),
+      env.DB.prepare("SELECT id, url, name, category, enabled, kind, interval_minutes, last_fetched_at, priority FROM feeds WHERE enabled = 1 ORDER BY priority, id").all(),
       env.DB.prepare("SELECT guid FROM seen").all(),
       env.DB.prepare("SELECT title_key FROM seen WHERE title_key IS NOT NULL ORDER BY seen_at DESC LIMIT 400").all(),
       publishedToday(env, s),
@@ -837,6 +901,19 @@ async function pipelineRoute(request, env, path, method, origin) {
     if (status !== "publishing") return json({ id: p.id, status, image_url: `${origin}/img/${p.id}.jpg` });
     const out = await applyPublish(env, origin, p, s);
     return json({ id: p.id, status: out.status, error: out.error, image_url: `${origin}/img/${p.id}.jpg` });
+  }
+  if (path === "/pipeline/ig-media" && method === "GET") {
+    const s = await getSettings(env);
+    if (!s.fb_token || !s.fb_ig_id) throw new HttpError(400, "Instagram reading is not connected (Channels > Instagram reading)");
+    const username = String(new URL(request.url).searchParams.get("username") || "").replace(/[^\w.]/g, "");
+    const fields = `business_discovery.username(${username}){username,media.limit(12){id,caption,permalink,timestamp,media_type}}`;
+    const res = await fetch(`https://graph.facebook.com/${s.fb_ig_id}?fields=${encodeURIComponent(fields)}&access_token=${encodeURIComponent(s.fb_token)}`);
+    const data = await res.json();
+    if (!data.business_discovery) {
+      const msg = data.error?.message || "account not found";
+      throw new HttpError(400, `Instagram @${username}: ${msg} (only public Business/Creator accounts can be read)`);
+    }
+    return json({ media: data.business_discovery.media?.data || [] });
   }
   if (path === "/pipeline/seen" && method === "POST") {
     const { items = [] } = await body(request);
@@ -912,8 +989,8 @@ async function panelRoute(request, env, path, method, origin) {
   if (path === "/api/app-secret" && method === "POST") {
     const b = await body(request);
     const secret = String(b.secret || "").trim();
-    if (b.provider !== "instagram" || !/^[a-f0-9]{24,64}$/i.test(secret)) throw new HttpError(400, "That doesn't look like an Instagram app secret (32 letters and numbers).");
-    await saveSettings(env, { ig_app_secret: secret });
+    if (!["instagram", "facebook"].includes(b.provider) || !/^[a-f0-9]{24,64}$/i.test(secret)) throw new HttpError(400, "That doesn't look like an app secret (32 letters and numbers).");
+    await saveSettings(env, b.provider === "instagram" ? { ig_app_secret: secret } : { fb_app_secret: secret });
     return json({ ok: true });
   }
   if (path === "/api/destinations" && method === "POST") {
@@ -937,8 +1014,9 @@ async function panelRoute(request, env, path, method, origin) {
     const b = await body(request);
     const src = await resolveSource(String(b.url || ""));
     const interval = Math.max(0, Math.min(1440, Number(b.interval_minutes) || 0));
-    await env.DB.prepare("INSERT INTO feeds (url, name, category, enabled, kind, interval_minutes, created_at) VALUES (?, ?, ?, 1, ?, ?, ?)")
-      .bind(src.url, String(b.name || "").trim() || src.name || null, String(b.category || "").trim() || null, src.kind, interval, nowIso())
+    const priority = Math.max(1, Math.min(99, Number(b.priority) || 5));
+    await env.DB.prepare("INSERT INTO feeds (url, name, category, enabled, kind, interval_minutes, priority, created_at) VALUES (?, ?, ?, 1, ?, ?, ?, ?)")
+      .bind(src.url, String(b.name || "").trim() || src.name || null, String(b.category || "").trim() || null, src.kind, interval, priority, nowIso())
       .run()
       .catch(() => {
         throw new HttpError(409, "That source is already in the list");
@@ -957,6 +1035,7 @@ async function panelRoute(request, env, path, method, origin) {
       if ("name" in b) fields.name = String(b.name || "") || null;
       if ("category" in b) fields.category = String(b.category || "") || null;
       if ("interval_minutes" in b) fields.interval_minutes = Math.max(0, Math.min(1440, Number(b.interval_minutes) || 0));
+      if ("priority" in b) fields.priority = Math.max(1, Math.min(99, Number(b.priority) || 5));
       const sets = Object.keys(fields).map((k) => `${k} = ?`);
       const vals = Object.values(fields);
       if (sets.length) await env.DB.prepare(`UPDATE feeds SET ${sets.join(", ")} WHERE id = ?`).bind(...vals, Number(m[1])).run();

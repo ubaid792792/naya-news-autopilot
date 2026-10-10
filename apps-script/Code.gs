@@ -6,7 +6,7 @@
 
 var QUEUE = 'Queue';
 var POSTED = 'Posted';
-var Q_HEAD = ['Added', 'Title', 'Source', 'Link', 'Published', 'Category', 'Summary'];
+var Q_HEAD = ['Added', 'Title', 'Source', 'Link', 'Published', 'Category', 'Summary', 'Priority', 'Topic'];
 var P_HEAD = ['Posted', 'Result', 'Title', 'Source', 'Link', 'Image'];
 var POSTED_KEEP = 1000;
 // Optional: id of an existing spreadsheet to use (the long part of its link after /d/).
@@ -74,6 +74,9 @@ function sheet_(name, head) {
     ss.setSpreadsheetTimeZone('Asia/Karachi');
   }
   if (!sh) sh = ss.insertSheet(name);
+  if (sh.getLastRow() > 0 && sh.getLastColumn() < head.length) {
+    sh.getRange(1, 1, 1, head.length).setValues([head]).setFontWeight('bold').setBackground('#FFC72C');
+  }
   if (sh.getLastRow() === 0) {
     sh.appendRow(head);
     sh.setFrozenRows(1);
@@ -85,7 +88,7 @@ function sheet_(name, head) {
 function rows_(sh) {
   var n = sh.getLastRow() - 1;
   if (n < 1) return [];
-  var vals = sh.getRange(2, 1, n, sh.getLastColumn()).getValues();
+  var vals = sh.getRange(2, 1, n, Math.max(sh.getLastColumn(), Q_HEAD.length)).getValues();
   return vals.map(function (v, i) { return { row: i + 2, v: v }; })
     .filter(function (r) { return String(r.v[3] || '').indexOf('http') === 0; });
 }
@@ -93,7 +96,8 @@ function rows_(sh) {
 function toItem_(r) {
   var v = r.v;
   return { row: r.row, added: iso_(v[0]), title: String(v[1] || ''), source: String(v[2] || ''), link: String(v[3]),
-           published: iso_(v[4]), category: String(v[5] || ''), summary: String(v[6] || '') };
+           published: iso_(v[4]), category: String(v[5] || ''), summary: String(v[6] || ''),
+           priority: v[7] === '' || v[7] === undefined ? 5 : Number(v[7]), topic: String(v[8] || '') };
 }
 
 function iso_(d) {
@@ -117,7 +121,7 @@ function append_(q, p, items) {
     if (link.indexOf('http') !== 0 || have[link] || posted[link]) return;
     have[link] = true;
     rows.push([new Date(), it.title || '', it.source || '', link, it.published ? new Date(it.published) : '',
-               it.category || '', String(it.summary || '').slice(0, 1500)]);
+               it.category || '', String(it.summary || '').slice(0, 1500), it.priority || 5, it.topic || '']);
   });
   if (rows.length) q.getRange(q.getLastRow() + 1, 1, rows.length, Q_HEAD.length).setValues(rows);
   return rows.length;

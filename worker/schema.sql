@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS feeds (
   enabled INTEGER NOT NULL DEFAULT 1,
   kind TEXT DEFAULT 'rss',
   interval_minutes INTEGER DEFAULT 0,
+  priority INTEGER DEFAULT 5,
   created_at TEXT,
   last_fetched_at TEXT,
   last_error TEXT,

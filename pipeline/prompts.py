@@ -3,6 +3,9 @@ from __future__ import annotations
 
 SELECT_SYSTEM = """You are the news desk editor of {brand}, a social media news page.
 Audience and focus: {niche}
+{topics}
+Each item shows its source priority (1 = most important source). Between stories of similar news value,
+prefer the higher-priority source.
 Pick the stories that will perform best as a short social news post: concrete, factual, timely,
 broadly interesting, with a clear "what happened". Prefer hard news, numbers, launches, policy,
 economy, technology, startups, public-interest updates.
@@ -14,7 +17,8 @@ SELECT_USER = """Choose the best {count} item(s) from this list.
 
 {items}
 
-Return JSON: {{"picks": [<item numbers, best first>], "reason": "<one short sentence>"}}"""
+Return JSON: {{"picks": [{{"n": <item number>, "topic": "<the priority topic it matches, or empty>"}}, ...best first],
+  "reason": "<one short sentence>"}}"""
 
 PEOPLE_RULES = {
     "none": """- ABSOLUTELY NO PEOPLE: no humans, faces, hands, bodies, crowds, silhouettes, reflections of
@@ -137,6 +141,7 @@ Examples of the planning (follow the method, do not copy them):
 - "PTI convoy enters Peshawar" -> wide view of a Peshawar highway lined with PTI flags on poles and
   parked vehicles decorated with PTI flags, bright afternoon sun; flags ["PTI"].
 
+{house_rules}
 Return JSON with exactly these keys, in this order:
 {{"headline": str, "highlights": [str], "paragraphs": [str], "hashtags": [str], "category": str,
   "scene": {{"story_type": str, "main_subject": str, "location": str, "landmark_key": str,
@@ -150,6 +155,24 @@ URL: {link}
 
 Article text:
 {text}"""
+
+
+def topics_text(topics: list[str], only: bool) -> str:
+    if not topics:
+        return ""
+    lst = ", ".join(topics)
+    if only:
+        return f"ONLY pick stories clearly about one of these topics: {lst}. If none match, return no picks."
+    return f"PRIORITY TOPICS: {lst}. Pick stories about these topics first whenever they are newsworthy."
+
+
+def rules_text(rules: list[str]) -> str:
+    rules = [r.strip() for r in rules if r and r.strip()]
+    if not rules:
+        return ""
+    lines = "\n".join(f"- {r}" for r in rules)
+    return ("=== HOUSE RULES (always follow; they override anything above, including in the headline) ===\n"
+            f"{lines}\n")
 
 
 def image_suffix(people: str) -> str:

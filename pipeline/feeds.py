@@ -34,6 +34,8 @@ class Item:
     published: datetime | None
     feed_id: int | None = None
     category: str = ""
+    priority: int = 5
+    topic: str = ""
     title_key: str = field(init=False)
 
     def __post_init__(self):
@@ -71,6 +73,38 @@ def is_similar(key: str, others: list[str], threshold: float = 0.72) -> bool:
         if shared >= 4 and shared / max(1, min(len(core), len(other_core))) >= 0.5:
             return True
     return False
+
+
+def topic_match(text: str, topics: list[str]) -> str:
+    """First priority topic found in the text (whole words, any case), or ''."""
+    low = (text or "").lower()
+    for t in topics or []:
+        t = t.strip()
+        if t and re.search(rf"(?<![\w]){re.escape(t.lower())}(?![\w])", low):
+            return t
+    return ""
+
+
+def instagram_items(feed: dict, media: list[dict]) -> list[Item]:
+    """Posts from a public Instagram Business/Creator account (Meta Business Discovery)."""
+    username = feed["url"].rstrip("/").split("/")[-1].lstrip("@")
+    items = []
+    for m in media:
+        caption = re.sub(r"\s+", " ", m.get("caption") or "").strip()
+        if len(caption) < 60:
+            continue
+        stamp = m.get("timestamp")
+        published = None
+        if stamp:
+            try:
+                published = datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%S%z").astimezone(timezone.utc)
+            except ValueError:
+                pass
+        title = re.split(r"(?<=[.!?])\s", caption, maxsplit=1)[0][:160]
+        items.append(Item(guid=f"ig:{m.get('id')}", title=title, link=m.get("permalink") or f"https://www.instagram.com/{username}/",
+                          summary=caption[:1500], source=feed.get("name") or f"Instagram @{username}", published=published,
+                          feed_id=feed.get("id"), category=feed.get("category", ""), priority=int(feed.get("priority") or 5)))
+    return items
 
 
 def is_due(feed: dict, now: datetime) -> bool:
@@ -121,6 +155,13 @@ def fetch_telegram(feed: dict) -> tuple[list[Item], str | None]:
 
 
 def fetch_feed(feed: dict) -> tuple[list[Item], str | None]:
+    items, err = _fetch_feed(feed)
+    for it in items:
+        it.priority = int(feed.get("priority") or 5)
+    return items, err
+
+
+def _fetch_feed(feed: dict) -> tuple[list[Item], str | None]:
     if feed.get("kind") == "telegram" or feed["url"].startswith("https://t.me/s/"):
         return fetch_telegram(feed)
     try:
