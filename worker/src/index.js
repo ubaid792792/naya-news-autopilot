@@ -337,6 +337,22 @@ async function dispatch(env, mode, trigger, articleUrl = "") {
 
 // ---------- scheduler ----------
 
+// Keep two posts of headroom under Instagram's 24-hour publishing limit; when it is reached, pause
+// Instagram for 15 minutes so the moving window can free up before the next try.
+const IG_QUOTA_HEADROOM = 2;
+async function instagramHasRoom(env, s) {
+  if (!(s.publish_instagram && s.ig_token && s.ig_user_id)) return true;
+  try {
+    const q = await social.instagramQuota(s);
+    if (!q || q.used < q.total - IG_QUOTA_HEADROOM) return true;
+    await saveSettings(env, { ig_paused_until: new Date(Date.now() + 15 * 60000).toISOString() });
+    return false;
+  } catch (err) {
+    console.error("instagram quota check failed", err.message);
+    return true;
+  }
+}
+
 async function tick(env) {
   const s = await getSettings(env);
   const stale = new Date(Date.now() - 40 * 60000).toISOString();
@@ -361,6 +377,7 @@ async function tick(env) {
   if (!(await usage.capacity(env, s)).any) return;
   const busy = await env.DB.prepare("SELECT COUNT(*) AS n FROM runs WHERE status IN ('dispatched','running')").first();
   if (busy?.n) return;
+  if (!(await instagramHasRoom(env, s)) && !(await usage.capacity(env, { ...s, ig_paused_until: new Date(Date.now() + 60000).toISOString() })).any) return;
   await saveSettings(env, { last_dispatch_at: nowIso() });
   try {
     await dispatch(env, "live", "schedule");
@@ -566,6 +583,10 @@ async function publishPost(env, origin, post, s) {
   }
   if (s.publish_instagram && s.ig_token && !cap.instagram) {
     skipped.push(cap.igPaused ? `Instagram (rate limit, paused until ${cap.igPaused.slice(11, 16)} UTC)` : "Instagram (100 posts/day reached)");
+  }
+  if (s.publish_instagram && s.ig_token && cap.instagram && !(await instagramHasRoom(env, s))) {
+    cap.instagram = false;
+    skipped.push("Instagram (100 posts in the last 24 hours reached)");
   }
   if (s.publish_instagram && s.ig_token && cap.instagram) {
     try {

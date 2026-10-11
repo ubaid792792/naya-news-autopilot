@@ -165,6 +165,14 @@ export async function instagramRefresh(s) {
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Instagram's own count of API posts in the last 24 hours (a moving window, not a calendar day).
+export async function instagramQuota(s) {
+  const res = await fetch(`https://graph.instagram.com/${s.ig_user_id}/content_publishing_limit?fields=config,quota_usage&access_token=${encodeURIComponent(s.ig_token)}`);
+  const row = (await res.json()).data?.[0];
+  if (!row) return null;
+  return { used: Number(row.quota_usage || 0), total: Number(row.config?.quota_total || 100) };
+}
+
 export async function instagramPublish(s, post, imageUrl) {
   if (!s.ig_token) throw new Error("Instagram is not connected. Click Connect Instagram in the panel.");
   const base = `https://graph.instagram.com/${s.ig_user_id}`;
