@@ -803,9 +803,11 @@ async function facebookOauth(request, env, url, step, st) {
   const redirect = `${origin}/oauth/facebook/callback`;
   if (step === "start") {
     if (!(await hasSession(request, env))) return Response.redirect(`${origin}/`, 302);
+    // Business apps use a Facebook Login for Business configuration (FB_CONFIG_ID) instead of scopes.
     const q = new URLSearchParams({
       client_id: env.FB_APP_ID, redirect_uri: redirect, state: await social.makeState(env, "facebook"), response_type: "code",
-      scope: "instagram_basic,pages_show_list,pages_read_engagement,business_management",
+      ...(env.FB_CONFIG_ID ? { config_id: env.FB_CONFIG_ID }
+        : { scope: "instagram_basic,pages_show_list,pages_read_engagement,business_management" }),
     });
     return Response.redirect(`https://www.facebook.com/dialog/oauth?${q}`, 302);
   }
