@@ -72,13 +72,15 @@ const DEFAULTS = {
   panel_password_hash: null,
   fb_app_secret: null,
   fb_token: null,
+  fb_user_token: null,
+  fb_user_expires: null,
   fb_ig_id: null,
   fb_ig_username: null,
   fb_page_name: null,
 };
 const INTERNAL_KEYS = new Set(["buffer_channels", "last_dispatch_at", "last_cleanup_date", "asset_logo", "asset_frame", "custom_refs",
   "li_token", "li_expires", "li_person", "li_name", "ig_token", "ig_expires", "ig_token_at", "ig_user_id", "ig_username",
-  "ig_app_secret", "panel_password_hash", "fb_app_secret", "fb_token", "fb_ig_id", "fb_ig_username", "fb_page_name"]);
+  "ig_app_secret", "panel_password_hash", "fb_app_secret", "fb_token", "fb_user_token", "fb_user_expires", "fb_ig_id", "fb_ig_username", "fb_page_name"]);
 // Settings safe to show in the panel or send to the pipeline (no access tokens).
 const publicSettings = (s) => Object.fromEntries(Object.entries(s).filter(([k]) => !social.SECRET_SETTING_KEYS.includes(k)));
 const TEXT_MODELS = { large: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", small: "@cf/meta/llama-3.1-8b-instruct-fast" };
@@ -807,7 +809,7 @@ async function facebookOauth(request, env, url, step, st) {
     const q = new URLSearchParams({
       client_id: env.FB_APP_ID, redirect_uri: redirect, state: await social.makeState(env, "facebook"), response_type: "code",
       ...(env.FB_CONFIG_ID ? { config_id: env.FB_CONFIG_ID }
-        : { scope: "instagram_basic,pages_show_list,pages_read_engagement,business_management" }),
+        : { scope: "instagram_basic,instagram_manage_insights,pages_show_list,pages_read_engagement,business_management" }),
     });
     return Response.redirect(`https://www.facebook.com/dialog/oauth?${q}`, 302);
   }
@@ -827,6 +829,8 @@ async function facebookOauth(request, env, url, step, st) {
   }
   await saveSettings(env, {
     fb_token: page.access_token, fb_ig_id: page.instagram_business_account.id,
+    // Business Discovery is documented for user tokens; the long-lived one lasts about 60 days.
+    fb_user_token: user, fb_user_expires: new Date(Date.now() + (long.expires_in || 5184000) * 1000).toISOString(),
     fb_ig_username: page.instagram_business_account.username, fb_page_name: page.name,
   });
   return messagePage("Instagram reading connected", `Public Business/Creator Instagram accounts can now be added as news sources (via @${page.instagram_business_account.username}).`, true);
@@ -909,8 +913,13 @@ async function pipelineRoute(request, env, path, method, origin) {
     if (!s.fb_token || !s.fb_ig_id) throw new HttpError(400, "Instagram reading is not connected (Channels > Instagram reading)");
     const username = String(new URL(request.url).searchParams.get("username") || "").replace(/[^\w.]/g, "");
     const fields = `business_discovery.username(${username}){username,media.limit(12){id,caption,permalink,timestamp,media_type}}`;
-    const res = await fetch(`https://graph.facebook.com/${s.fb_ig_id}?fields=${encodeURIComponent(fields)}&access_token=${encodeURIComponent(s.fb_token)}`);
-    const data = await res.json();
+    // Try the Page token first (it never expires), then the user token.
+    let data = {};
+    for (const token of [s.fb_token, s.fb_user_token].filter(Boolean)) {
+      const res = await fetch(`https://graph.facebook.com/${s.fb_ig_id}?fields=${encodeURIComponent(fields)}&access_token=${encodeURIComponent(token)}`);
+      data = await res.json();
+      if (data.business_discovery) break;
+    }
     if (!data.business_discovery) {
       const msg = data.error?.message || "account not found";
       throw new HttpError(400, `Instagram @${username}: ${msg} (only public Business/Creator accounts can be read)`);
