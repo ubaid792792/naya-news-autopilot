@@ -70,6 +70,7 @@ const DEFAULTS = {
   ig_username: null,
   ig_app_secret: null,
   panel_password_hash: null,
+  ig_paused_until: null,
   fb_app_secret: null,
   fb_token: null,
   fb_user_token: null,
@@ -80,7 +81,7 @@ const DEFAULTS = {
 };
 const INTERNAL_KEYS = new Set(["buffer_channels", "last_dispatch_at", "last_cleanup_date", "asset_logo", "asset_frame", "custom_refs",
   "li_token", "li_expires", "li_person", "li_name", "ig_token", "ig_expires", "ig_token_at", "ig_user_id", "ig_username",
-  "ig_app_secret", "panel_password_hash", "fb_app_secret", "fb_token", "fb_user_token", "fb_user_expires", "fb_ig_id", "fb_ig_username", "fb_page_name"]);
+  "ig_app_secret", "ig_paused_until", "panel_password_hash", "fb_app_secret", "fb_token", "fb_user_token", "fb_user_expires", "fb_ig_id", "fb_ig_username", "fb_page_name"]);
 // Settings safe to show in the panel or send to the pipeline (no access tokens).
 const publicSettings = (s) => Object.fromEntries(Object.entries(s).filter(([k]) => !social.SECRET_SETTING_KEYS.includes(k)));
 const TEXT_MODELS = { large: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", small: "@cf/meta/llama-3.1-8b-instruct-fast" };
@@ -563,13 +564,19 @@ async function publishPost(env, origin, post, s) {
       results.push({ channel: s.li_name || "LinkedIn", service: "linkedin", ok: false, error: err.message });
     }
   }
-  if (s.publish_instagram && s.ig_token && !cap.instagram) skipped.push("Instagram (100 posts/day reached)");
+  if (s.publish_instagram && s.ig_token && !cap.instagram) {
+    skipped.push(cap.igPaused ? `Instagram (rate limit, paused until ${cap.igPaused.slice(11, 16)} UTC)` : "Instagram (100 posts/day reached)");
+  }
   if (s.publish_instagram && s.ig_token && cap.instagram) {
     try {
       const r = await social.instagramPublish(s, post, imageUrl);
       await usage.addUsage(env, "instagram_post", 1);
       results.push({ channel: `@${s.ig_username || "instagram"}`, service: "instagram", ok: true, link: r.link, remote_id: r.remote_id });
     } catch (err) {
+      // Meta's app rate limit: retrying only extends it, so pause Instagram for an hour.
+      if (/request limit|"code":\s*(4|17|32)\b/i.test(err.message)) {
+        await saveSettings(env, { ig_paused_until: new Date(Date.now() + 3600000).toISOString() });
+      }
       results.push({ channel: `@${s.ig_username || "instagram"}`, service: "instagram", ok: false, error: err.message });
     }
   }
@@ -596,7 +603,7 @@ async function publishPost(env, origin, post, s) {
     }
   }
   if (!results.length) {
-    const why = skipped.length ? `Daily limits reached: ${skipped.join("; ")}` : "No destination is connected. Open Channels in the panel and connect Instagram or Buffer.";
+    const why = skipped.length ? `Limits reached: ${skipped.join("; ")}` : "No destination is connected. Open Channels in the panel and connect Instagram or Buffer.";
     return { status: "failed", error: why, results };
   }
   const okCount = results.filter((r) => r.ok).length;

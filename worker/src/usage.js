@@ -43,7 +43,8 @@ export async function capacity(env, s) {
     buffer.push({ id: ch.id, ok: apiLeft > 0 && used < BUFFER_POSTS_PER_CHANNEL_DAY, used });
   }
   const igUsed = await getUsage(env, "instagram_post");
-  const instagram = Boolean(s.publish_instagram && s.ig_token) && igUsed < INSTAGRAM_POSTS_PER_DAY;
+  const igPaused = s.ig_paused_until && Date.parse(s.ig_paused_until) > Date.now() ? s.ig_paused_until : null;
+  const instagram = Boolean(s.publish_instagram && s.ig_token) && igUsed < INSTAGRAM_POSTS_PER_DAY && !igPaused;
   const linkedin = Boolean(s.publish_linkedin && s.li_token);
-  return { buffer, instagram, linkedin, any: buffer.some((b) => b.ok) || instagram || linkedin, bufferApiLeft: apiLeft, igUsed };
+  return { buffer, instagram, linkedin, any: buffer.some((b) => b.ok) || instagram || linkedin, bufferApiLeft: apiLeft, igUsed, igPaused };
 }
