@@ -64,6 +64,11 @@ async function runModel(env, m, prompt, refs, width, height) {
 // prompt_refs carries "reference image N" wording for models that take reference pictures;
 // prompt_plain describes flags and buildings in words for the others.
 export async function generate(env, { prompt, prompt_plain, references = [], model, width = 1024, height = 1232, posts_left = 1 }) {
+  if ((await getUsage(env, "neurons")) >= NEURONS_PER_DAY) {
+    const e = new Error("today's free Cloudflare AI allowance is used up (resets 00:00 UTC)");
+    e.status = 502;
+    throw e;
+  }
   const models = await chooseModels(env, model, references.length, posts_left);
   const errors = [];
   for (const m of models) {
@@ -76,6 +81,12 @@ export async function generate(env, { prompt, prompt_plain, references = [], mod
       return { image, model: m.id + (useRefs ? ` +${references.length} refs` : "") };
     } catch (err) {
       errors.push(`${m.label}: ${String(err.message || err).slice(0, 160)}`);
+      // Cloudflare's own count says the daily allowance is gone: the estimate was low, so mark the
+      // day as used up and let the pipeline fall back to Pollinations without more failed calls.
+      if (/4006|daily free allocation/i.test(String(err.message || err))) {
+        await addUsage(env, "neurons", Math.max(0, NEURONS_PER_DAY - (await getUsage(env, "neurons"))));
+        break;
+      }
     }
   }
   const e = new Error(`all image models failed: ${errors.join(" | ")}`);

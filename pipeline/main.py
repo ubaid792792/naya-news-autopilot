@@ -125,6 +125,8 @@ def select(ai: TextAI, cands: list[Item], count: int, s: dict) -> list[Item]:
                                                        topics=prompts.topics_text(topics, only)),
                           prompts.SELECT_USER.format(count=count + 2, items="\n".join(lines)), cheap=True)
             order, labels = [], {}
+            if isinstance(res, list):  # some models answer with the bare picks list
+                res = {"picks": res}
             for p in res.get("picks", []):
                 n, t = (p.get("n"), p.get("topic") or "") if isinstance(p, dict) else (p, "")
                 if str(n).isdigit() and 0 < int(n) <= len(pool):

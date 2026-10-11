@@ -174,13 +174,15 @@ export async function instagramPublish(s, post, imageUrl) {
     body: form({ image_url: imageUrl, caption: String(post.caption).slice(0, 2200), alt_text: (post.alt_text || post.headline || "").slice(0, 1000) }),
   })).json();
   if (!created.id) throw new Error(`Instagram refused the image: ${JSON.stringify(created.error || created).slice(0, 200)}`);
-  // Wait until Instagram has processed the image before publishing it.
-  for (let i = 0; i < 10; i++) {
+  // Wait until Instagram has processed the image; publishing earlier fails with "Media ID is not available".
+  let ready = false;
+  for (let i = 0; i < 12 && !ready; i++) {
+    await wait(i === 0 ? 3000 : 4000);
     const st = await (await fetch(`https://graph.instagram.com/${created.id}?fields=status_code&access_token=${encodeURIComponent(s.ig_token)}`)).json();
-    if (st.status_code === "FINISHED") break;
     if (st.status_code === "ERROR" || st.status_code === "EXPIRED") throw new Error(`Instagram could not process the image (${st.status_code})`);
-    await wait(2000);
+    ready = st.status_code === "FINISHED";
   }
+  if (!ready) throw new Error("Instagram is still processing the image; it will be retried later");
   const pub = await (await fetch(`${base}/media_publish`, { method: "POST", body: form({ creation_id: created.id }) })).json();
   if (!pub.id) throw new Error(`Instagram publish failed: ${JSON.stringify(pub.error || pub).slice(0, 200)}`);
   const info = await (await fetch(`https://graph.instagram.com/${pub.id}?fields=permalink&access_token=${encodeURIComponent(s.ig_token)}`)).json();
