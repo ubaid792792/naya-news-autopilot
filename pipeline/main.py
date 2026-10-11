@@ -147,6 +147,14 @@ class NotEnoughText(Exception):
     pass
 
 
+def remove_from_queue(queue: SheetQueue, link: str, **kw) -> None:
+    """Move a finished story to the Posted tab. A lost reply must not fail a run whose post already went out."""
+    try:
+        queue.remove(link, **kw)
+    except RuntimeError as exc:
+        log.warning("could not move %s to Posted: %s", link, exc)
+
+
 def write_post(ai: TextAI, item: Item, s: dict, custom_refs: list[dict] | None = None) -> dict:
     item.link = resolve_google_news(item.link)
     # Instagram and Telegram post pages are login walls or widgets; their caption is already the story.
@@ -244,7 +252,12 @@ def collect(ctx: dict, queue: SheetQueue) -> str:
     picks = select(ctx["ai"], cands, k, s)[:k] if cands else []
     added = queue.append(picks)
     worker.mark_seen([{"guid": i.guid, "title_key": i.title_key} for i in picks])
-    pruned = queue.prune(float(s.get("queue_max_age_hours", 24)), int(s.get("queue_max_items", 30)))
+    try:
+        pruned = queue.prune(float(s.get("queue_max_age_hours", 24)), int(s.get("queue_max_items", 30)))
+    except RuntimeError as exc:
+        # Cleanup only; Google sometimes loses the reply even though the sheet was pruned.
+        log.warning("queue cleanup skipped: %s", exc)
+        pruned = 0
     msg = f"queue: +{added} new, -{pruned} old"
     log.info(msg)
     return msg
@@ -281,18 +294,18 @@ def publish_from_queue(ctx: dict, queue: SheetQueue, count: int) -> list[dict]:
         except NotEnoughText as exc:
             log.info("skipping %s: %s", item.link, exc)
             if ctx["mode"] != "test":
-                queue.remove(row["link"], result=f"skipped: {exc}")
+                remove_from_queue(queue, row["link"], result=f"skipped: {exc}")
             continue
         except Exception as exc:  # noqa: BLE001
             if "all text models failed" in str(exc):
                 raise
             log.error("post failed for %s: %s", item.link, exc)
             if ctx["mode"] != "test":
-                queue.remove(row["link"], result=f"failed: {str(exc)[:120]}")
+                remove_from_queue(queue, row["link"], result=f"failed: {str(exc)[:120]}")
             continue
         created.append(res)
         if ctx["mode"] != "test":
-            queue.remove(row["link"], result=res.get("status", ""), image=res.get("image_url", ""))
+            remove_from_queue(queue, row["link"], result=res.get("status", ""), image=res.get("image_url", ""))
     return created
 
 
@@ -326,7 +339,7 @@ def main() -> int:
             created.append(make_post(item, ctx))
             worker.mark_seen([{"guid": item.guid, "title_key": item.title_key}])
             if queue and mode == "live":
-                queue.remove(article_url, result=created[-1].get("status", ""), image=created[-1].get("image_url", ""))
+                remove_from_queue(queue, article_url, result=created[-1].get("status", ""), image=created[-1].get("image_url", ""))
         elif queue:
             notes.append(collect(ctx, queue))
             if mode == "collect":
