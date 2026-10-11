@@ -149,7 +149,9 @@ class NotEnoughText(Exception):
 
 def write_post(ai: TextAI, item: Item, s: dict, custom_refs: list[dict] | None = None) -> dict:
     item.link = resolve_google_news(item.link)
-    text = fetch_article_text(item.link)
+    # Instagram and Telegram post pages are login walls or widgets; their caption is already the story.
+    social_post = re.match(r"https://(www\.)?(instagram\.com|t\.me)/", item.link)
+    text = "" if social_post else fetch_article_text(item.link)
     if len(text) < 300:
         text = (item.summary + "\n" + text).strip()
     if len(text) < 250:
