@@ -402,6 +402,12 @@ function render() {
   if (!state.config.buffer) notes.push('<b>Buffer key missing.</b> Publishing is disabled until BUFFER_API_KEY is set on the Worker.');
   else if (!chans.length && !s.li_name && !s.ig_username) notes.push('<b>No destination yet.</b> Open the Channels tab to connect LinkedIn, Instagram or Buffer.');
   if (!state.config.github) notes.push('<b>GitHub not linked.</b> Runs cannot start until GH_TOKEN is set on the Worker.');
+  if (s.ig_paused_until && Date.parse(s.ig_paused_until) > Date.now()) {
+    const until = new Date(s.ig_paused_until).toLocaleString();
+    notes.push(s.ig_block_reason
+      ? '<b>Instagram paused until ' + until + '.</b> Instagram blocked publishing ("' + s.ig_block_reason + '"). Retrying during a block makes it last longer, so posting waits and the schedule was slowed down.'
+      : '<b>Instagram paused until ' + until + '</b> (Meta rate limit).');
+  }
   $('#notices').innerHTML = notes.map(n => '<div class="notice">' + n + '</div>').join('');
 
   renderPosts(); renderFeeds(); renderRuns(); renderChannels(); renderDirect(); fillForms(); renderAssets(); renderRefs(); renderRules();

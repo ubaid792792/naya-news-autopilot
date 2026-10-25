@@ -71,6 +71,7 @@ const DEFAULTS = {
   ig_app_secret: null,
   panel_password_hash: null,
   ig_paused_until: null,
+  ig_block_reason: null,
   fb_app_secret: null,
   fb_token: null,
   fb_user_token: null,
@@ -81,7 +82,7 @@ const DEFAULTS = {
 };
 const INTERNAL_KEYS = new Set(["buffer_channels", "last_dispatch_at", "last_cleanup_date", "asset_logo", "asset_frame", "custom_refs",
   "li_token", "li_expires", "li_person", "li_name", "ig_token", "ig_expires", "ig_token_at", "ig_user_id", "ig_username",
-  "ig_app_secret", "ig_paused_until", "panel_password_hash", "fb_app_secret", "fb_token", "fb_user_token", "fb_user_expires", "fb_ig_id", "fb_ig_username", "fb_page_name"]);
+  "ig_app_secret", "ig_paused_until", "ig_block_reason", "panel_password_hash", "fb_app_secret", "fb_token", "fb_user_token", "fb_user_expires", "fb_ig_id", "fb_ig_username", "fb_page_name"]);
 // Settings safe to show in the panel or send to the pipeline (no access tokens).
 const publicSettings = (s) => Object.fromEntries(Object.entries(s).filter(([k]) => !social.SECRET_SETTING_KEYS.includes(k)));
 const TEXT_MODELS = { large: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", small: "@cf/meta/llama-3.1-8b-instruct-fast" };
@@ -594,9 +595,19 @@ async function publishPost(env, origin, post, s) {
       await usage.addUsage(env, "instagram_post", 1);
       results.push({ channel: `@${s.ig_username || "instagram"}`, service: "instagram", ok: true, link: r.link, remote_id: r.remote_id });
     } catch (err) {
-      // Meta's app rate limit: retrying only extends it, so pause Instagram for an hour.
-      if (/request limit|"code":\s*(4|17|32)\b/i.test(err.message)) {
-        await saveSettings(env, { ig_paused_until: new Date(Date.now() + 3600000).toISOString() });
+      if (/2207051|Action is blocked/i.test(err.message)) {
+        // Instagram's spam protection blocked publishing on the account. Every retry during a block
+        // can extend it, so stop for two days and halve the posting pace for when it comes back.
+        const slower = Math.min(720, Math.max(120, s.interval_minutes * 2));
+        await saveSettings(env, {
+          ig_paused_until: new Date(Date.now() + 48 * 3600000).toISOString(),
+          ig_block_reason: "Action is blocked",
+          interval_minutes: slower,
+          daily_cap: Math.max(1, Math.min(s.daily_cap, Math.floor(1440 / slower))),
+        });
+      } else if (/request limit|"code":\s*(4|17|32)\b/i.test(err.message)) {
+        // Meta's app rate limit: retrying only extends it, so pause Instagram for an hour.
+        await saveSettings(env, { ig_paused_until: new Date(Date.now() + 3600000).toISOString(), ig_block_reason: null });
       }
       results.push({ channel: `@${s.ig_username || "instagram"}`, service: "instagram", ok: false, error: err.message });
     }
